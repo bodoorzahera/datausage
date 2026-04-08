@@ -122,7 +122,8 @@ fun DashboardScreen(
                 }
             }
 
-            // Usage summary cards
+            // Internet usage summary
+            Text("Internet Usage", style = MaterialTheme.typography.titleSmall)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -142,6 +143,31 @@ fun DashboardScreen(
                     value = FormatUtils.formatBytes(state.monthUsage),
                     modifier = Modifier.weight(1f)
                 )
+            }
+
+            // Internal (local) usage summary — only show if there's any
+            if (state.todayInternal > 0 || state.weekInternal > 0 || state.monthInternal > 0) {
+                Text("Internal (Local) Usage", style = MaterialTheme.typography.titleSmall)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    UsageSummaryCard(
+                        label = "Today",
+                        value = FormatUtils.formatBytes(state.todayInternal),
+                        modifier = Modifier.weight(1f)
+                    )
+                    UsageSummaryCard(
+                        label = "This Week",
+                        value = FormatUtils.formatBytes(state.weekInternal),
+                        modifier = Modifier.weight(1f)
+                    )
+                    UsageSummaryCard(
+                        label = "This Month",
+                        value = FormatUtils.formatBytes(state.monthInternal),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
 
             // Cost summary

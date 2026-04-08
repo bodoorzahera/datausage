@@ -34,6 +34,9 @@ class SessionRepository @Inject constructor(
     suspend fun getTotalTxInRange(profileId: Long, from: Long, to: Long): Long =
         sessionDao.getTotalTxInRange(profileId, from, to)
 
+    suspend fun getTotalInternalUsageInRange(profileId: Long, from: Long, to: Long): Long =
+        sessionDao.getTotalInternalUsageInRange(profileId, from, to)
+
     suspend fun startSession(profileId: Long): Long {
         return sessionDao.insert(
             SessionEntity(
@@ -50,10 +53,21 @@ class SessionRepository @Inject constructor(
         )
     }
 
-    suspend fun updateSessionUsage(sessionId: Long, totalRx: Long, totalTx: Long) {
+    suspend fun updateSessionUsage(
+        sessionId: Long,
+        externalRx: Long,
+        externalTx: Long,
+        internalRx: Long,
+        internalTx: Long
+    ) {
         val session = sessionDao.getById(sessionId) ?: return
         sessionDao.update(
-            session.copy(totalBytesRx = totalRx, totalBytesTx = totalTx)
+            session.copy(
+                totalBytesRx = externalRx,
+                totalBytesTx = externalTx,
+                internalBytesRx = internalRx,
+                internalBytesTx = internalTx
+            )
         )
     }
 

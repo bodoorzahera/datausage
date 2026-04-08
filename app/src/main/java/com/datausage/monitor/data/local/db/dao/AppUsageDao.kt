@@ -8,15 +8,19 @@ import kotlinx.coroutines.flow.Flow
 
 data class AppUsageSummary(
     val packageName: String,
-    val totalRx: Long,
-    val totalTx: Long
+    val totalRx: Long,       // external download
+    val totalTx: Long,       // external upload
+    val totalInternalRx: Long,  // internal download
+    val totalInternalTx: Long   // internal upload
 )
 
 @Dao
 interface AppUsageDao {
 
     @Query("""
-        SELECT packageName, SUM(bytesRx) as totalRx, SUM(bytesTx) as totalTx
+        SELECT packageName,
+            SUM(bytesRx) as totalRx, SUM(bytesTx) as totalTx,
+            SUM(internalRx) as totalInternalRx, SUM(internalTx) as totalInternalTx
         FROM app_usage WHERE sessionId = :sessionId
         GROUP BY packageName
         ORDER BY (SUM(bytesRx) + SUM(bytesTx)) DESC
@@ -24,7 +28,9 @@ interface AppUsageDao {
     suspend fun getUsageByAppForSession(sessionId: Long): List<AppUsageSummary>
 
     @Query("""
-        SELECT packageName, SUM(bytesRx) as totalRx, SUM(bytesTx) as totalTx
+        SELECT packageName,
+            SUM(bytesRx) as totalRx, SUM(bytesTx) as totalTx,
+            SUM(internalRx) as totalInternalRx, SUM(internalTx) as totalInternalTx
         FROM app_usage
         WHERE sessionId IN (
             SELECT sessionId FROM sessions
@@ -36,7 +42,9 @@ interface AppUsageDao {
     suspend fun getUsageByAppForPeriod(profileId: Long, from: Long, to: Long): List<AppUsageSummary>
 
     @Query("""
-        SELECT packageName, SUM(bytesRx) as totalRx, SUM(bytesTx) as totalTx
+        SELECT packageName,
+            SUM(bytesRx) as totalRx, SUM(bytesTx) as totalTx,
+            SUM(internalRx) as totalInternalRx, SUM(internalTx) as totalInternalTx
         FROM app_usage
         WHERE sessionId IN (
             SELECT sessionId FROM sessions WHERE profileId = :profileId

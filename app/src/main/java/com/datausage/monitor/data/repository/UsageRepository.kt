@@ -6,6 +6,7 @@ import com.datausage.monitor.data.local.db.dao.MonitoredAppDao
 import com.datausage.monitor.data.local.db.entity.AppUsageEntity
 import com.datausage.monitor.data.local.db.entity.MonitoredAppEntity
 import com.datausage.monitor.util.NetworkUsageHelper
+import com.datausage.monitor.util.UsageBytes
 import kotlinx.coroutines.flow.Flow
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -16,6 +17,9 @@ class UsageRepository @Inject constructor(
     private val monitoredAppDao: MonitoredAppDao,
     private val networkUsageHelper: NetworkUsageHelper
 ) {
+    // Baseline TrafficStats captured at session start, keyed by UID
+    private var trafficBaseline: Map<Int, UsageBytes> = emptyMap()
+
     fun getMonitoredApps(profileId: Long): Flow<List<MonitoredAppEntity>> =
         monitoredAppDao.getMonitoredApps(profileId)
 
@@ -42,23 +46,41 @@ class UsageRepository @Inject constructor(
         monitoredAppDao.insertAll(apps)
     }
 
+    /**
+     * Capture TrafficStats baseline when a session starts.
+     * Must be called before the first pollUsage() call.
+     */
+    fun captureBaseline(profileId: Long, uids: List<Int>) {
+        trafficBaseline = networkUsageHelper.captureBaseline(uids)
+    }
+
+    /**
+     * Poll usage with split: external (internet) vs internal (localhost/LAN).
+     *
+     * External = NetworkStatsManager (WiFi + Mobile interfaces)
+     * Internal = TrafficStats total - External
+     */
     suspend fun pollUsage(sessionId: Long, profileId: Long, sessionStartTime: Long) {
         val monitoredApps = monitoredAppDao.getMonitoredAppsList(profileId)
         if (monitoredApps.isEmpty()) return
 
         val uids = monitoredApps.map { it.uid }
-        val usageMap = networkUsageHelper.getAllAppsUsageSince(uids, sessionStartTime)
+        val splitUsageMap = networkUsageHelper.getAllAppsSplitUsage(
+            uids, sessionStartTime, trafficBaseline
+        )
 
         val now = System.currentTimeMillis()
         val usageEntities = monitoredApps.mapNotNull { app ->
-            val usage = usageMap[app.uid] ?: return@mapNotNull null
+            val split = splitUsageMap[app.uid] ?: return@mapNotNull null
             AppUsageEntity(
                 sessionId = sessionId,
                 monitoredAppId = app.id,
                 packageName = app.packageName,
                 timestamp = now,
-                bytesRx = usage.rxBytes,
-                bytesTx = usage.txBytes
+                bytesRx = split.external.rxBytes,
+                bytesTx = split.external.txBytes,
+                internalRx = split.internal.rxBytes,
+                internalTx = split.internal.txBytes
             )
         }
 

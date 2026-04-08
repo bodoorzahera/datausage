@@ -24,9 +24,12 @@ data class DashboardState(
     val profile: ProfileEntity? = null,
     val activeSession: SessionEntity? = null,
     val isMonitoring: Boolean = false,
-    val todayUsage: Long = 0,
-    val weekUsage: Long = 0,
-    val monthUsage: Long = 0,
+    val todayUsage: Long = 0,         // external (internet)
+    val weekUsage: Long = 0,          // external (internet)
+    val monthUsage: Long = 0,         // external (internet)
+    val todayInternal: Long = 0,      // internal (local)
+    val weekInternal: Long = 0,       // internal (local)
+    val monthInternal: Long = 0,      // internal (local)
     val todayCost: CostSummary? = null,
     val monthCost: CostSummary? = null
 )
@@ -62,22 +65,25 @@ class DashboardViewModel @Inject constructor(
         val activeSession = sessionRepository.getActiveSession(profileId)
         val now = System.currentTimeMillis()
 
-        val todayUsage = sessionRepository.getTotalUsageInRange(
-            profileId, FormatUtils.startOfDay(now), FormatUtils.endOfDay(now)
-        )
-        val weekUsage = sessionRepository.getTotalUsageInRange(
-            profileId, FormatUtils.startOfWeek(now), FormatUtils.endOfWeek(now)
-        )
-        val monthUsage = sessionRepository.getTotalUsageInRange(
-            profileId, FormatUtils.startOfMonth(now), FormatUtils.endOfMonth(now)
-        )
+        val dayStart = FormatUtils.startOfDay(now)
+        val dayEnd = FormatUtils.endOfDay(now)
+        val weekStart = FormatUtils.startOfWeek(now)
+        val weekEnd = FormatUtils.endOfWeek(now)
+        val monthStart = FormatUtils.startOfMonth(now)
+        val monthEnd = FormatUtils.endOfMonth(now)
 
-        val todayCost = costRepository.calculateCostForPeriod(
-            profileId, FormatUtils.startOfDay(now), FormatUtils.endOfDay(now)
-        )
-        val monthCost = costRepository.calculateCostForPeriod(
-            profileId, FormatUtils.startOfMonth(now), FormatUtils.endOfMonth(now)
-        )
+        // External (internet) usage
+        val todayUsage = sessionRepository.getTotalUsageInRange(profileId, dayStart, dayEnd)
+        val weekUsage = sessionRepository.getTotalUsageInRange(profileId, weekStart, weekEnd)
+        val monthUsage = sessionRepository.getTotalUsageInRange(profileId, monthStart, monthEnd)
+
+        // Internal (local) usage
+        val todayInternal = sessionRepository.getTotalInternalUsageInRange(profileId, dayStart, dayEnd)
+        val weekInternal = sessionRepository.getTotalInternalUsageInRange(profileId, weekStart, weekEnd)
+        val monthInternal = sessionRepository.getTotalInternalUsageInRange(profileId, monthStart, monthEnd)
+
+        val todayCost = costRepository.calculateCostForPeriod(profileId, dayStart, dayEnd)
+        val monthCost = costRepository.calculateCostForPeriod(profileId, monthStart, monthEnd)
 
         _state.value = DashboardState(
             profile = profile,
@@ -86,6 +92,9 @@ class DashboardViewModel @Inject constructor(
             todayUsage = todayUsage,
             weekUsage = weekUsage,
             monthUsage = monthUsage,
+            todayInternal = todayInternal,
+            weekInternal = weekInternal,
+            monthInternal = monthInternal,
             todayCost = todayCost,
             monthCost = monthCost
         )

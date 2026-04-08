@@ -9,7 +9,6 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.ServiceCompat
 import com.datausage.monitor.data.local.db.dao.AppUsageSummary
-import com.datausage.monitor.data.local.db.entity.DataLimitEntity
 import com.datausage.monitor.data.repository.LimitRepository
 import com.datausage.monitor.data.repository.SessionRepository
 import com.datausage.monitor.data.repository.UsageRepository
@@ -95,30 +94,40 @@ class DataMonitorService : Service() {
             .putLong(KEY_ACTIVE_SESSION_ID, sessionId)
             .apply()
 
+        // Capture TrafficStats baseline for internal traffic calculation
+        val monitoredApps = usageRepository.getMonitoredAppsList(profileId)
+        val uids = monitoredApps.map { it.uid }
+        usageRepository.captureBaseline(profileId, uids)
+
         // Start polling loop
         pollingJob = serviceScope.launch {
             val session = sessionRepository.getById(sessionId) ?: return@launch
             while (isActive) {
                 try {
-                    // Poll usage from NetworkStatsManager
+                    // Poll usage — gets split external/internal
                     usageRepository.pollUsage(sessionId, profileId, session.startTime)
 
-                    // Calculate totals
+                    // Calculate totals from app usage snapshots
                     val appUsages = usageRepository.getUsageByAppForSession(sessionId)
-                    val totalRx = appUsages.sumOf { it.totalRx }
-                    val totalTx = appUsages.sumOf { it.totalTx }
+                    val externalRx = appUsages.sumOf { it.totalRx }
+                    val externalTx = appUsages.sumOf { it.totalTx }
+                    val internalRx = appUsages.sumOf { it.totalInternalRx }
+                    val internalTx = appUsages.sumOf { it.totalInternalTx }
 
-                    // Update session totals
-                    sessionRepository.updateSessionUsage(sessionId, totalRx, totalTx)
+                    // Update session with split totals
+                    sessionRepository.updateSessionUsage(
+                        sessionId, externalRx, externalTx, internalRx, internalTx
+                    )
 
-                    // Update notification
-                    updateNotification(totalRx + totalTx)
+                    // Notification shows ONLY external (internet) usage
+                    val externalTotal = externalRx + externalTx
+                    val internalTotal = internalRx + internalTx
+                    updateNotification(externalTotal, internalTotal)
 
-                    // Check limits
+                    // Limits check against external usage only
                     checkLimits(profileId, appUsages)
 
                 } catch (e: Exception) {
-                    // Log but don't crash the service
                     e.printStackTrace()
                 }
 
@@ -127,11 +136,12 @@ class DataMonitorService : Service() {
         }
     }
 
-    private fun updateNotification(totalBytes: Long) {
+    private fun updateNotification(externalBytes: Long, internalBytes: Long) {
+        val text = "Internet: ${FormatUtils.formatBytes(externalBytes)}" +
+            if (internalBytes > 0) " | Local: ${FormatUtils.formatBytes(internalBytes)}" else ""
+
         val notification = NotificationHelper.buildMonitoringNotification(
-            this,
-            "Monitoring",
-            FormatUtils.formatBytes(totalBytes)
+            this, "Monitoring", text
         ).build()
 
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
@@ -143,14 +153,13 @@ class DataMonitorService : Service() {
         val now = System.currentTimeMillis()
 
         for (limit in limits) {
+            // Limits apply to EXTERNAL usage only
             val usage = when {
                 limit.packageName != null -> {
-                    // Per-app limit
                     val appUsage = appUsages.find { it.packageName == limit.packageName }
                     (appUsage?.totalRx ?: 0) + (appUsage?.totalTx ?: 0)
                 }
                 else -> {
-                    // Profile-wide limit
                     val (from, to) = getPeriodRange(limit.periodType, now)
                     sessionRepository.getTotalUsageInRange(profileId, from, to)
                 }
@@ -164,7 +173,7 @@ class DataMonitorService : Service() {
                 NotificationHelper.postExceededNotification(
                     this,
                     "Data Limit Exceeded!",
-                    "${limit.packageName ?: "Total"} usage: ${FormatUtils.formatBytes(usage)} / ${FormatUtils.formatBytes(limit.limitBytes)}",
+                    "${limit.packageName ?: "Total"} internet: ${FormatUtils.formatBytes(usage)} / ${FormatUtils.formatBytes(limit.limitBytes)}",
                     NotificationHelper.NOTIFICATION_ID_EXCEEDED + limit.id.toInt()
                 )
             } else if (percentUsed >= limit.warningPercent) {
@@ -183,7 +192,7 @@ class DataMonitorService : Service() {
             "daily" -> Pair(FormatUtils.startOfDay(now), FormatUtils.endOfDay(now))
             "weekly" -> Pair(FormatUtils.startOfWeek(now), FormatUtils.endOfWeek(now))
             "monthly" -> Pair(FormatUtils.startOfMonth(now), FormatUtils.endOfMonth(now))
-            else -> Pair(0, now) // session - from beginning
+            else -> Pair(0, now)
         }
     }
 

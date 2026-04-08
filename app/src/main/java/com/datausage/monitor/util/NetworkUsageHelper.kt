@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
+import android.net.TrafficStats
 import android.telephony.TelephonyManager
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -23,6 +24,20 @@ data class UsageBytes(
     val totalBytes: Long get() = rxBytes + txBytes
 }
 
+/**
+ * Separates external (internet) traffic from internal (localhost/LAN) traffic.
+ *
+ * - external = traffic through WiFi + Mobile interfaces (internet-bound)
+ * - internal = total TrafficStats minus external (loopback, localhost, Termux, LAN servers)
+ */
+data class SplitUsage(
+    val external: UsageBytes,
+    val internal: UsageBytes
+) {
+    val totalExternal: Long get() = external.totalBytes
+    val totalInternal: Long get() = internal.totalBytes
+}
+
 @Singleton
 class NetworkUsageHelper @Inject constructor(
     private val context: Context
@@ -30,7 +45,11 @@ class NetworkUsageHelper @Inject constructor(
     private val networkStatsManager: NetworkStatsManager =
         context.getSystemService(Context.NETWORK_STATS_SERVICE) as NetworkStatsManager
 
-    fun getAppUsageSince(
+    /**
+     * Get ONLY external (internet) usage for an app via NetworkStatsManager.
+     * This counts WiFi + Mobile traffic only — excludes loopback/internal.
+     */
+    fun getExternalUsageSince(
         uid: Int,
         startTime: Long,
         endTime: Long = System.currentTimeMillis()
@@ -38,7 +57,7 @@ class NetworkUsageHelper @Inject constructor(
         var rxBytes = 0L
         var txBytes = 0L
 
-        // Query WiFi
+        // WiFi (external)
         try {
             val wifiStats = networkStatsManager.querySummary(
                 ConnectivityManager.TYPE_WIFI, null, startTime, endTime
@@ -52,11 +71,9 @@ class NetworkUsageHelper @Inject constructor(
                 }
             }
             wifiStats.close()
-        } catch (_: Exception) {
-            // WiFi stats may not be available
-        }
+        } catch (_: Exception) {}
 
-        // Query Mobile
+        // Mobile (external)
         try {
             val telephonyManager =
                 context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
@@ -78,22 +95,41 @@ class NetworkUsageHelper @Inject constructor(
                 }
             }
             mobileStats.close()
-        } catch (_: Exception) {
-            // Mobile stats may not be available (no SIM, no permission)
-        }
+        } catch (_: Exception) {}
 
         return UsageBytes(rxBytes, txBytes)
     }
 
-    fun getAllAppsUsageSince(
+    /**
+     * Get total usage (all interfaces including loopback) from TrafficStats.
+     * This is cumulative since device boot, so we store a baseline at session start.
+     */
+    fun getTotalTrafficStatsUsage(uid: Int): UsageBytes {
+        val rx = TrafficStats.getUidRxBytes(uid)
+        val tx = TrafficStats.getUidTxBytes(uid)
+        return UsageBytes(
+            rxBytes = if (rx == TrafficStats.UNSUPPORTED.toLong()) 0L else rx,
+            txBytes = if (tx == TrafficStats.UNSUPPORTED.toLong()) 0L else tx
+        )
+    }
+
+    /**
+     * Get split usage for all monitored apps.
+     * Returns external (internet only) and internal (loopback/local) separately.
+     *
+     * External = NetworkStatsManager (WiFi + Mobile)
+     * Internal = TrafficStats total - External (clamped to >= 0)
+     */
+    fun getAllAppsSplitUsage(
         uids: List<Int>,
         startTime: Long,
+        baselineTraffic: Map<Int, UsageBytes>,
         endTime: Long = System.currentTimeMillis()
-    ): Map<Int, UsageBytes> {
-        val result = mutableMapOf<Int, UsageBytes>()
+    ): Map<Int, SplitUsage> {
         val uidSet = uids.toSet()
+        val externalMap = mutableMapOf<Int, UsageBytes>()
 
-        // Query WiFi
+        // Query WiFi (external)
         try {
             val wifiStats = networkStatsManager.querySummary(
                 ConnectivityManager.TYPE_WIFI, null, startTime, endTime
@@ -102,8 +138,8 @@ class NetworkUsageHelper @Inject constructor(
             while (wifiStats.hasNextBucket()) {
                 wifiStats.getNextBucket(bucket)
                 if (bucket.uid in uidSet) {
-                    val existing = result[bucket.uid] ?: UsageBytes(0, 0)
-                    result[bucket.uid] = UsageBytes(
+                    val existing = externalMap[bucket.uid] ?: UsageBytes(0, 0)
+                    externalMap[bucket.uid] = UsageBytes(
                         existing.rxBytes + bucket.rxBytes,
                         existing.txBytes + bucket.txBytes
                     )
@@ -112,7 +148,7 @@ class NetworkUsageHelper @Inject constructor(
             wifiStats.close()
         } catch (_: Exception) {}
 
-        // Query Mobile
+        // Query Mobile (external)
         try {
             val telephonyManager =
                 context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
@@ -129,8 +165,8 @@ class NetworkUsageHelper @Inject constructor(
             while (mobileStats.hasNextBucket()) {
                 mobileStats.getNextBucket(bucket)
                 if (bucket.uid in uidSet) {
-                    val existing = result[bucket.uid] ?: UsageBytes(0, 0)
-                    result[bucket.uid] = UsageBytes(
+                    val existing = externalMap[bucket.uid] ?: UsageBytes(0, 0)
+                    externalMap[bucket.uid] = UsageBytes(
                         existing.rxBytes + bucket.rxBytes,
                         existing.txBytes + bucket.txBytes
                     )
@@ -139,7 +175,37 @@ class NetworkUsageHelper @Inject constructor(
             mobileStats.close()
         } catch (_: Exception) {}
 
+        // Calculate internal = (current TrafficStats - baseline) - external
+        val result = mutableMapOf<Int, SplitUsage>()
+        for (uid in uids) {
+            val external = externalMap[uid] ?: UsageBytes(0, 0)
+
+            val currentTotal = getTotalTrafficStatsUsage(uid)
+            val baseline = baselineTraffic[uid] ?: UsageBytes(0, 0)
+
+            val totalSinceStart = UsageBytes(
+                rxBytes = maxOf(0, currentTotal.rxBytes - baseline.rxBytes),
+                txBytes = maxOf(0, currentTotal.txBytes - baseline.txBytes)
+            )
+
+            // Internal = total - external (clamped to 0)
+            val internal = UsageBytes(
+                rxBytes = maxOf(0, totalSinceStart.rxBytes - external.rxBytes),
+                txBytes = maxOf(0, totalSinceStart.txBytes - external.txBytes)
+            )
+
+            result[uid] = SplitUsage(external = external, internal = internal)
+        }
+
         return result
+    }
+
+    /**
+     * Capture TrafficStats baseline for all UIDs at session start.
+     * Store this to calculate internal traffic later.
+     */
+    fun captureBaseline(uids: List<Int>): Map<Int, UsageBytes> {
+        return uids.associateWith { uid -> getTotalTrafficStatsUsage(uid) }
     }
 
     fun getInstalledApps(): List<AppInfo> {

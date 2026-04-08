@@ -30,6 +30,7 @@ interface SessionDao {
     """)
     suspend fun getSessionsInRange(profileId: Long, from: Long, to: Long): List<SessionEntity>
 
+    // External (internet) usage totals
     @Query("""
         SELECT COALESCE(SUM(totalBytesRx + totalBytesTx), 0) FROM sessions
         WHERE profileId = :profileId
@@ -50,6 +51,14 @@ interface SessionDao {
         AND startTime >= :from AND (endTime <= :to OR endTime IS NULL)
     """)
     suspend fun getTotalTxInRange(profileId: Long, from: Long, to: Long): Long
+
+    // Internal (localhost/LAN) usage totals
+    @Query("""
+        SELECT COALESCE(SUM(internalBytesRx + internalBytesTx), 0) FROM sessions
+        WHERE profileId = :profileId
+        AND startTime >= :from AND (endTime <= :to OR endTime IS NULL)
+    """)
+    suspend fun getTotalInternalUsageInRange(profileId: Long, from: Long, to: Long): Long
 
     @Insert
     suspend fun insert(session: SessionEntity): Long

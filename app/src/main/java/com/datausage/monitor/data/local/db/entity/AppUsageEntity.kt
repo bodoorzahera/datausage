@@ -30,6 +30,8 @@ data class AppUsageEntity(
     val monitoredAppId: Long,
     val packageName: String,
     val timestamp: Long,
-    val bytesRx: Long,
-    val bytesTx: Long
+    val bytesRx: Long,          // external (internet) download
+    val bytesTx: Long,          // external (internet) upload
+    val internalRx: Long = 0,   // internal (localhost/LAN) download
+    val internalTx: Long = 0    // internal (localhost/LAN) upload
 )

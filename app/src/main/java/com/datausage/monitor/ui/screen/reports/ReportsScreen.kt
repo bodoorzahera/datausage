@@ -87,11 +87,12 @@ fun ReportsScreen(
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Total Usage", style = MaterialTheme.typography.titleMedium)
+                        Text("Internet Usage", style = MaterialTheme.typography.titleMedium)
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             FormatUtils.formatBytes(state.totalUsage),
-                            style = MaterialTheme.typography.headlineMedium
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.primary
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Row(
@@ -100,6 +101,14 @@ fun ReportsScreen(
                         ) {
                             Text("Download: ${FormatUtils.formatBytes(state.totalRx)}")
                             Text("Upload: ${FormatUtils.formatBytes(state.totalTx)}")
+                        }
+                        if (state.totalInternal > 0) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                "Internal (Local): ${FormatUtils.formatBytes(state.totalInternal)}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                         if (state.cost > 0) {
                             Spacer(modifier = Modifier.height(8.dp))
@@ -131,7 +140,8 @@ fun ReportsScreen(
                 val maxUsage = state.appUsages.maxOfOrNull { it.totalRx + it.totalTx } ?: 1L
 
                 items(state.appUsages) { usage ->
-                    val total = usage.totalRx + usage.totalTx
+                    val extTotal = usage.totalRx + usage.totalTx
+                    val intTotal = usage.totalInternalRx + usage.totalInternalTx
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(12.dp)) {
                             Row(
@@ -144,13 +154,14 @@ fun ReportsScreen(
                                     modifier = Modifier.weight(1f)
                                 )
                                 Text(
-                                    FormatUtils.formatBytes(total),
-                                    style = MaterialTheme.typography.bodyMedium
+                                    FormatUtils.formatBytes(extTotal),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.primary
                                 )
                             }
                             Spacer(modifier = Modifier.height(4.dp))
                             LinearProgressIndicator(
-                                progress = { total.toFloat() / maxUsage.toFloat() },
+                                progress = { extTotal.toFloat() / maxUsage.toFloat() },
                                 modifier = Modifier.fillMaxWidth()
                             )
                             Row(
@@ -164,6 +175,13 @@ fun ReportsScreen(
                                 Text(
                                     "Up: ${FormatUtils.formatBytes(usage.totalTx)}",
                                     style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                            if (intTotal > 0) {
+                                Text(
+                                    "Internal: ${FormatUtils.formatBytes(intTotal)}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }

@@ -83,18 +83,36 @@ fun SessionScreen(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         if (isRunning && activeSession != null) {
+                            val s = activeSession!!
+                            val extTotal = s.totalBytesRx + s.totalBytesTx
+                            val intTotal = s.internalBytesRx + s.internalBytesTx
                             Text(
                                 "Session Active",
                                 style = MaterialTheme.typography.titleLarge
                             )
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text("Started: ${FormatUtils.formatDateTime(activeSession!!.startTime)}")
+                            Text("Started: ${FormatUtils.formatDateTime(s.startTime)}")
                             Text(
-                                "Usage: ${FormatUtils.formatBytes(activeSession!!.totalBytesRx + activeSession!!.totalBytesTx)}"
+                                "Internet: ${FormatUtils.formatBytes(extTotal)}",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary
                             )
                             Text(
-                                "Down: ${FormatUtils.formatBytes(activeSession!!.totalBytesRx)} / Up: ${FormatUtils.formatBytes(activeSession!!.totalBytesTx)}"
+                                "Down: ${FormatUtils.formatBytes(s.totalBytesRx)} / Up: ${FormatUtils.formatBytes(s.totalBytesTx)}"
                             )
+                            if (intTotal > 0) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    "Internal (Local): ${FormatUtils.formatBytes(intTotal)}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    "Down: ${FormatUtils.formatBytes(s.internalBytesRx)} / Up: ${FormatUtils.formatBytes(s.internalBytesTx)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         } else {
                             Text(
                                 "No Active Session",
@@ -131,18 +149,30 @@ fun SessionScreen(
                     )
                 }
                 items(appUsages) { usage ->
+                    val extTotal = usage.totalRx + usage.totalTx
+                    val intTotal = usage.totalInternalRx + usage.totalInternalTx
                     Card(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                usage.packageName.substringAfterLast("."),
-                                modifier = Modifier.weight(1f)
-                            )
-                            Text(FormatUtils.formatBytes(usage.totalRx + usage.totalTx))
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    usage.packageName.substringAfterLast("."),
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    FormatUtils.formatBytes(extTotal),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            if (intTotal > 0) {
+                                Text(
+                                    "Internal: ${FormatUtils.formatBytes(intTotal)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
@@ -169,6 +199,8 @@ fun SessionScreen(
 
 @Composable
 private fun SessionHistoryCard(session: SessionEntity) {
+    val extTotal = session.totalBytesRx + session.totalBytesTx
+    val intTotal = session.internalBytesRx + session.internalBytesTx
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(
@@ -179,10 +211,20 @@ private fun SessionHistoryCard(session: SessionEntity) {
                     FormatUtils.formatDate(session.startTime),
                     style = MaterialTheme.typography.labelMedium
                 )
-                Text(
-                    FormatUtils.formatBytes(session.totalBytesRx + session.totalBytesTx),
-                    style = MaterialTheme.typography.labelLarge
-                )
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        "Internet: ${FormatUtils.formatBytes(extTotal)}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    if (intTotal > 0) {
+                        Text(
+                            "Internal: ${FormatUtils.formatBytes(intTotal)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
             Text(
                 "${FormatUtils.formatTime(session.startTime)} - ${FormatUtils.formatTime(session.endTime ?: 0)}",
