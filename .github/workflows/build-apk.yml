@@ -30,22 +30,12 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build Debug APK
+      - name: Build Debug APK (arm64 only, minified)
         run: ./gradlew assembleDebug
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: data-usage-monitor-debug
+          name: data-usage-monitor
           path: app/build/outputs/apk/debug/*.apk
-          retention-days: 30
-
-      - name: Build Release APK (unsigned)
-        run: ./gradlew assembleRelease
-
-      - name: Upload Release APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: data-usage-monitor-release
-          path: app/build/outputs/apk/release/*.apk
           retention-days: 30

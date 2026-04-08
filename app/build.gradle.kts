@@ -19,9 +19,23 @@ android {
         versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Only arm64 — modern phones only, smallest APK size
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
+        debug {
+            // Shrink debug too for smaller APK
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -30,6 +44,13 @@ android {
                 "proguard-rules.pro"
             )
         }
+    }
+
+    // Single density + language to reduce size
+    bundle {
+        language { enableSplit = true }
+        density { enableSplit = true }
+        abi { enableSplit = true }
     }
 
     compileOptions {

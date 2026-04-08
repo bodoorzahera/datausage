@@ -50,6 +50,8 @@ data class ExportSession(
     val endTime: Long? = null,
     val totalBytesRx: Long,
     val totalBytesTx: Long,
+    val internalBytesRx: Long = 0,
+    val internalBytesTx: Long = 0,
     val networkType: Int = 0,
     val appUsage: List<ExportAppUsage> = emptyList()
 )
@@ -59,7 +61,9 @@ data class ExportAppUsage(
     val packageName: String,
     val timestamp: Long,
     val bytesRx: Long,
-    val bytesTx: Long
+    val bytesTx: Long,
+    val internalRx: Long = 0,
+    val internalTx: Long = 0
 )
 
 @Serializable
@@ -118,16 +122,20 @@ class ImportExportRepository @Inject constructor(
         val writer = outputStream.bufferedWriter()
 
         // Header
-        writer.write("Profile,Session ID,Start Time,End Time,App Package,Bytes Rx,Bytes Tx,Total Bytes\n")
+        writer.write("Profile,Session ID,Start Time,End Time,App Package,Bytes Rx,Bytes Tx,Total Bytes,Internal Rx,Internal Tx,Internal Total\n")
 
         val sessions = sessionDao.getSessionsInRange(profileId, 0, Long.MAX_VALUE)
         for (session in sessions) {
             val appUsages = appUsageDao.getUsageByAppForSession(session.sessionId)
             if (appUsages.isEmpty()) {
-                writer.write("${profile.name},${session.sessionId},${session.startTime},${session.endTime ?: ""},,,${session.totalBytesRx + session.totalBytesTx}\n")
+                val extTotal = session.totalBytesRx + session.totalBytesTx
+                val intTotal = session.internalBytesRx + session.internalBytesTx
+                writer.write("${profile.name},${session.sessionId},${session.startTime},${session.endTime ?: ""},,,${extTotal},${session.internalBytesRx},${session.internalBytesTx},${intTotal}\n")
             } else {
                 for (usage in appUsages) {
-                    writer.write("${profile.name},${session.sessionId},${session.startTime},${session.endTime ?: ""},${usage.packageName},${usage.totalRx},${usage.totalTx},${usage.totalRx + usage.totalTx}\n")
+                    val extTotal = usage.totalRx + usage.totalTx
+                    val intTotal = usage.totalInternalRx + usage.totalInternalTx
+                    writer.write("${profile.name},${session.sessionId},${session.startTime},${session.endTime ?: ""},${usage.packageName},${usage.totalRx},${usage.totalTx},${extTotal},${usage.totalInternalRx},${usage.totalInternalTx},${intTotal}\n")
                 }
             }
         }
@@ -174,6 +182,9 @@ class ImportExportRepository @Inject constructor(
             val packageName = parts[4].trim()
             val bytesRx = parts[5].trim().toLongOrNull() ?: 0
             val bytesTx = parts[6].trim().toLongOrNull() ?: 0
+            // Internal fields (columns 8,9) — optional for backwards compatibility
+            val internalRx = parts.getOrNull(8)?.trim()?.toLongOrNull() ?: 0
+            val internalTx = parts.getOrNull(9)?.trim()?.toLongOrNull() ?: 0
 
             val dbSessionId = sessionMap.getOrPut(csvSessionId) {
                 sessionDao.insert(
@@ -182,7 +193,9 @@ class ImportExportRepository @Inject constructor(
                         startTime = startTime,
                         endTime = endTime,
                         totalBytesRx = bytesRx,
-                        totalBytesTx = bytesTx
+                        totalBytesTx = bytesTx,
+                        internalBytesRx = internalRx,
+                        internalBytesTx = internalTx
                     )
                 )
             }
@@ -195,7 +208,9 @@ class ImportExportRepository @Inject constructor(
                         packageName = packageName,
                         timestamp = startTime,
                         bytesRx = bytesRx,
-                        bytesTx = bytesTx
+                        bytesTx = bytesTx,
+                        internalRx = internalRx,
+                        internalTx = internalTx
                     )
                 )
             }
@@ -225,13 +240,17 @@ class ImportExportRepository @Inject constructor(
                     endTime = session.endTime,
                     totalBytesRx = session.totalBytesRx,
                     totalBytesTx = session.totalBytesTx,
+                    internalBytesRx = session.internalBytesRx,
+                    internalBytesTx = session.internalBytesTx,
                     networkType = session.networkType,
                     appUsage = appUsages.map { usage ->
                         ExportAppUsage(
                             packageName = usage.packageName,
                             timestamp = session.startTime,
                             bytesRx = usage.totalRx,
-                            bytesTx = usage.totalTx
+                            bytesTx = usage.totalTx,
+                            internalRx = usage.totalInternalRx,
+                            internalTx = usage.totalInternalTx
                         )
                     }
                 )
@@ -295,6 +314,8 @@ class ImportExportRepository @Inject constructor(
                     endTime = exportSession.endTime,
                     totalBytesRx = exportSession.totalBytesRx,
                     totalBytesTx = exportSession.totalBytesTx,
+                    internalBytesRx = exportSession.internalBytesRx,
+                    internalBytesTx = exportSession.internalBytesTx,
                     networkType = exportSession.networkType
                 )
             )
@@ -306,7 +327,9 @@ class ImportExportRepository @Inject constructor(
                     packageName = usage.packageName,
                     timestamp = usage.timestamp,
                     bytesRx = usage.bytesRx,
-                    bytesTx = usage.bytesTx
+                    bytesTx = usage.bytesTx,
+                    internalRx = usage.internalRx,
+                    internalTx = usage.internalTx
                 )
             }
             if (appUsages.isNotEmpty()) {
