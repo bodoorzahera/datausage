@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Data Usage Monitor</string>
+    <string name="channel_monitoring">Usage Monitoring</string>
+    <string name="channel_monitoring_desc">Persistent notification while monitoring data usage</string>
+    <string name="channel_warnings">Usage Warnings</string>
+    <string name="channel_warnings_desc">Alerts when approaching data limits</string>
+    <string name="channel_exceeded">Limit Exceeded</string>
+    <string name="channel_exceeded_desc">Critical alerts when data limits are exceeded</string>
+    <string name="notification_monitoring_title">Monitoring Data Usage</string>
+    <string name="notification_monitoring_text">Tracking data usage for %1$s</string>
+</resources>
