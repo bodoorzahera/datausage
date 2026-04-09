@@ -17,40 +17,54 @@ data class AppUsageSummary(
 @Dao
 interface AppUsageDao {
 
+    // Values stored are cumulative since session start — use MAX() to get the latest (correct) total.
     @Query("""
         SELECT packageName,
-            SUM(bytesRx) as totalRx, SUM(bytesTx) as totalTx,
-            SUM(internalRx) as totalInternalRx, SUM(internalTx) as totalInternalTx
+            MAX(bytesRx) as totalRx, MAX(bytesTx) as totalTx,
+            MAX(internalRx) as totalInternalRx, MAX(internalTx) as totalInternalTx
         FROM app_usage WHERE sessionId = :sessionId
         GROUP BY packageName
-        ORDER BY (SUM(bytesRx) + SUM(bytesTx)) DESC
+        ORDER BY (MAX(bytesRx) + MAX(bytesTx)) DESC
     """)
     suspend fun getUsageByAppForSession(sessionId: Long): List<AppUsageSummary>
 
+    // Per-session MAX first, then SUM across sessions to avoid multiplying cumulative snapshots.
     @Query("""
         SELECT packageName,
-            SUM(bytesRx) as totalRx, SUM(bytesTx) as totalTx,
-            SUM(internalRx) as totalInternalRx, SUM(internalTx) as totalInternalTx
-        FROM app_usage
-        WHERE sessionId IN (
-            SELECT sessionId FROM sessions
-            WHERE profileId = :profileId AND startTime >= :from AND startTime <= :to
+            SUM(maxRx) as totalRx, SUM(maxTx) as totalTx,
+            SUM(maxInternalRx) as totalInternalRx, SUM(maxInternalTx) as totalInternalTx
+        FROM (
+            SELECT packageName,
+                MAX(bytesRx) as maxRx, MAX(bytesTx) as maxTx,
+                MAX(internalRx) as maxInternalRx, MAX(internalTx) as maxInternalTx
+            FROM app_usage
+            WHERE sessionId IN (
+                SELECT sessionId FROM sessions
+                WHERE profileId = :profileId AND startTime >= :from AND startTime <= :to
+            )
+            GROUP BY sessionId, packageName
         )
         GROUP BY packageName
-        ORDER BY (SUM(bytesRx) + SUM(bytesTx)) DESC
+        ORDER BY (SUM(maxRx) + SUM(maxTx)) DESC
     """)
     suspend fun getUsageByAppForPeriod(profileId: Long, from: Long, to: Long): List<AppUsageSummary>
 
     @Query("""
         SELECT packageName,
-            SUM(bytesRx) as totalRx, SUM(bytesTx) as totalTx,
-            SUM(internalRx) as totalInternalRx, SUM(internalTx) as totalInternalTx
-        FROM app_usage
-        WHERE sessionId IN (
-            SELECT sessionId FROM sessions WHERE profileId = :profileId
+            SUM(maxRx) as totalRx, SUM(maxTx) as totalTx,
+            SUM(maxInternalRx) as totalInternalRx, SUM(maxInternalTx) as totalInternalTx
+        FROM (
+            SELECT packageName,
+                MAX(bytesRx) as maxRx, MAX(bytesTx) as maxTx,
+                MAX(internalRx) as maxInternalRx, MAX(internalTx) as maxInternalTx
+            FROM app_usage
+            WHERE sessionId IN (
+                SELECT sessionId FROM sessions WHERE profileId = :profileId
+            )
+            AND packageName = :packageName
+            AND timestamp >= :from AND timestamp <= :to
+            GROUP BY sessionId, packageName
         )
-        AND packageName = :packageName
-        AND timestamp >= :from AND timestamp <= :to
         GROUP BY packageName
     """)
     suspend fun getUsageForApp(profileId: Long, packageName: String, from: Long, to: Long): AppUsageSummary?
@@ -63,6 +77,10 @@ interface AppUsageDao {
 
     @Insert
     suspend fun insertAll(usages: List<AppUsageEntity>)
+
+    /** Replace the current snapshot for a session with fresh data (keeps only latest per app). */
+    @Query("DELETE FROM app_usage WHERE sessionId = :sessionId")
+    suspend fun deleteForSession(sessionId: Long)
 
     @Query("DELETE FROM app_usage WHERE sessionId IN (SELECT sessionId FROM sessions WHERE profileId = :profileId)")
     suspend fun deleteAllForProfile(profileId: Long)

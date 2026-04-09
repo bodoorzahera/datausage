@@ -85,6 +85,9 @@ class UsageRepository @Inject constructor(
         }
 
         if (usageEntities.isNotEmpty()) {
+            // Replace previous snapshot so each session holds exactly one row per app.
+            // Values are cumulative since session start, so keep only the latest.
+            appUsageDao.deleteForSession(sessionId)
             appUsageDao.insertAll(usageEntities)
         }
     }
