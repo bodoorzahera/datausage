@@ -215,7 +215,7 @@ class DataMonitorService : Service() {
         const val PREFS_NAME = "monitor_state"
         const val KEY_ACTIVE_PROFILE_ID = "active_profile_id"
         const val KEY_ACTIVE_SESSION_ID = "active_session_id"
-        const val POLL_INTERVAL_MS = 60_000L
+        const val POLL_INTERVAL_MS = 30_000L // 30 seconds
 
         fun start(context: Context, profileId: Long) {
             val intent = Intent(context, DataMonitorService::class.java).apply {
