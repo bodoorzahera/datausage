@@ -26,23 +26,23 @@ data class UsageBytes(
     val txBytes: Long
 ) {
     val totalBytes: Long get() = rxBytes + txBytes
+    operator fun plus(other: UsageBytes) = UsageBytes(
+        rxBytes + other.rxBytes, txBytes + other.txBytes
+    )
 }
 
 /**
- * Separates external (internet) traffic from internal (localhost/LAN) traffic.
+ * Per-UID traffic split by network interface.
  *
- * Primary source: TrafficStats (reliable, real-time, per-UID)
- * Split source:   NetworkStatsManager (WiFi + Mobile breakdown)
- *
- * Fallback: if NetworkStatsManager returns 0 but TrafficStats shows traffic,
- *           all traffic is treated as external (internet) to avoid showing 0.
+ * wifi   = traffic through WiFi (NetworkStatsManager TYPE_WIFI)
+ * mobile = traffic through cellular (NetworkStatsManager TYPE_MOBILE)
+ * total  = wifi + mobile  (all internet traffic)
  */
 data class SplitUsage(
-    val external: UsageBytes,
-    val internal: UsageBytes
+    val wifi: UsageBytes,
+    val mobile: UsageBytes
 ) {
-    val totalExternal: Long get() = external.totalBytes
-    val totalInternal: Long get() = internal.totalBytes
+    val total: UsageBytes get() = wifi + mobile
 }
 
 @Singleton
@@ -52,36 +52,98 @@ class NetworkUsageHelper @Inject constructor(
     private val networkStatsManager: NetworkStatsManager =
         context.getSystemService(Context.NETWORK_STATS_SERVICE) as NetworkStatsManager
 
-    /**
-     * Check if PACKAGE_USAGE_STATS permission is granted.
-     * Without this, NetworkStatsManager queries will fail silently.
-     */
     fun hasUsageStatsPermission(): Boolean =
         PermissionHelper.hasUsageStatsPermission(context)
 
     /**
-     * Get ONLY external (internet) usage for a single UID.
-     * Uses queryDetailsForUid for precise per-UID query.
-     * Falls back to TrafficStats if NetworkStatsManager returns nothing.
+     * Get WiFi + Mobile usage separately for a single UID via NetworkStatsManager.
+     * If NetworkStatsManager fails, falls back to TrafficStats (reported as wifi).
      */
-    fun getExternalUsageSince(
+    fun getUsageSince(
         uid: Int,
         startTime: Long,
         endTime: Long = System.currentTimeMillis()
-    ): UsageBytes {
-        if (!hasUsageStatsPermission()) {
-            Log.w(TAG, "PACKAGE_USAGE_STATS not granted — NetworkStatsManager unavailable")
+    ): SplitUsage {
+        val hasPermission = hasUsageStatsPermission()
+        if (!hasPermission) {
+            Log.w(TAG, "PACKAGE_USAGE_STATS not granted for uid=$uid — using TrafficStats fallback")
         }
-        val wifi = queryNetworkUsageForUid(ConnectivityManager.TYPE_WIFI, listOf(null), uid, startTime, endTime)
-        val mobile = getMobileUsageForUid(uid, startTime, endTime)
-        return UsageBytes(wifi.rxBytes + mobile.rxBytes, wifi.txBytes + mobile.txBytes)
+
+        var wifi = UsageBytes(0, 0)
+        var mobile = UsageBytes(0, 0)
+
+        if (hasPermission) {
+            wifi = queryNetworkUsageForUid(
+                ConnectivityManager.TYPE_WIFI, listOf(null), uid, startTime, endTime
+            )
+            mobile = getMobileUsageForUid(uid, startTime, endTime)
+        }
+
+        // Fallback: if NetworkStatsManager returned nothing, use TrafficStats
+        if (wifi.totalBytes == 0L && mobile.totalBytes == 0L) {
+            val ts = getTrafficStatsUsage(uid)
+            if (ts.totalBytes > 0) {
+                Log.w(TAG, "NetworkStatsManager=0 for uid=$uid, TrafficStats=${ts.totalBytes}B — using TrafficStats fallback")
+                // Report TrafficStats as wifi since we can't distinguish
+                wifi = ts
+            }
+        }
+
+        return SplitUsage(wifi = wifi, mobile = mobile)
     }
 
     /**
-     * Get total usage (all interfaces including loopback) from TrafficStats.
-     * Cumulative since device boot — caller must subtract a baseline captured at session start.
+     * Get split usage for all monitored UIDs.
+     * Uses NetworkStatsManager with TrafficStats fallback per-UID.
      */
-    fun getTotalTrafficStatsUsage(uid: Int): UsageBytes {
+    fun getAllAppsSplitUsage(
+        uids: List<Int>,
+        startTime: Long,
+        baselineTraffic: Map<Int, UsageBytes>,
+        endTime: Long = System.currentTimeMillis()
+    ): Map<Int, SplitUsage> {
+        val hasPermission = hasUsageStatsPermission()
+        if (!hasPermission) {
+            Log.w(TAG, "PACKAGE_USAGE_STATS not granted — using TrafficStats fallback for all UIDs")
+        }
+
+        val result = mutableMapOf<Int, SplitUsage>()
+
+        for (uid in uids) {
+            var wifi = UsageBytes(0, 0)
+            var mobile = UsageBytes(0, 0)
+
+            if (hasPermission) {
+                wifi = queryNetworkUsageForUid(
+                    ConnectivityManager.TYPE_WIFI, listOf(null), uid, startTime, endTime
+                )
+                mobile = getMobileUsageForUid(uid, startTime, endTime)
+            }
+
+            // Fallback: if NetworkStatsManager returned nothing, use TrafficStats delta
+            if (wifi.totalBytes == 0L && mobile.totalBytes == 0L) {
+                val currentTotal = getTrafficStatsUsage(uid)
+                val baseline = baselineTraffic[uid] ?: UsageBytes(0, 0)
+                val delta = UsageBytes(
+                    rxBytes = maxOf(0L, currentTotal.rxBytes - baseline.rxBytes),
+                    txBytes = maxOf(0L, currentTotal.txBytes - baseline.txBytes)
+                )
+                if (delta.totalBytes > 0) {
+                    Log.w(TAG, "NetworkStatsManager=0 for uid=$uid, TrafficStats delta=${delta.totalBytes}B — fallback")
+                    wifi = delta
+                }
+            }
+
+            result[uid] = SplitUsage(wifi = wifi, mobile = mobile)
+        }
+
+        return result
+    }
+
+    /**
+     * Get total usage from TrafficStats (all interfaces, cumulative since boot).
+     */
+    fun getTrafficStatsUsage(uid: Int): UsageBytes {
         val rx = TrafficStats.getUidRxBytes(uid)
         val tx = TrafficStats.getUidTxBytes(uid)
         return UsageBytes(
@@ -91,104 +153,13 @@ class NetworkUsageHelper @Inject constructor(
     }
 
     /**
-     * Get split usage for all monitored UIDs in one pass.
-     *
-     * Strategy (TrafficStats-primary with NetworkStatsManager split):
-     *  1. Query TrafficStats delta since baseline → total traffic (all interfaces)
-     *  2. Query NetworkStatsManager (WiFi + Mobile) → network-interface traffic
-     *  3. If NetworkStatsManager returned data:
-     *       external = NetworkStatsManager result
-     *       internal = TrafficStats total − external (clamped ≥ 0)
-     *  4. If NetworkStatsManager returned 0 but TrafficStats shows traffic:
-     *       external = TrafficStats total (fallback — treat all as internet)
-     *       internal = 0
-     *     This prevents the bug where failed NetworkStatsManager queries cause
-     *     all traffic to be misclassified as "internal/local".
-     */
-    fun getAllAppsSplitUsage(
-        uids: List<Int>,
-        startTime: Long,
-        baselineTraffic: Map<Int, UsageBytes>,
-        endTime: Long = System.currentTimeMillis()
-    ): Map<Int, SplitUsage> {
-        val result = mutableMapOf<Int, SplitUsage>()
-        val hasPermission = hasUsageStatsPermission()
-        if (!hasPermission) {
-            Log.w(TAG, "PACKAGE_USAGE_STATS not granted — falling back to TrafficStats only")
-        }
-
-        for (uid in uids) {
-            // Step 1: TrafficStats delta since baseline (primary source, always available)
-            val currentTotal = getTotalTrafficStatsUsage(uid)
-            val baseline = baselineTraffic[uid] ?: UsageBytes(0, 0)
-            val totalSinceStart = UsageBytes(
-                rxBytes = maxOf(0L, currentTotal.rxBytes - baseline.rxBytes),
-                txBytes = maxOf(0L, currentTotal.txBytes - baseline.txBytes)
-            )
-
-            // Step 2: NetworkStatsManager query (WiFi + Mobile)
-            var networkStatsExternal = UsageBytes(0, 0)
-            if (hasPermission) {
-                val wifi = queryNetworkUsageForUid(
-                    ConnectivityManager.TYPE_WIFI, listOf(null), uid, startTime, endTime
-                )
-                val mobile = getMobileUsageForUid(uid, startTime, endTime)
-                networkStatsExternal = UsageBytes(
-                    rxBytes = wifi.rxBytes + mobile.rxBytes,
-                    txBytes = wifi.txBytes + mobile.txBytes
-                )
-            }
-
-            // Step 3: Determine split
-            val external: UsageBytes
-            val internal: UsageBytes
-
-            if (networkStatsExternal.totalBytes > 0) {
-                // NetworkStatsManager has data — use it for the split
-                external = networkStatsExternal
-                internal = UsageBytes(
-                    rxBytes = maxOf(0L, totalSinceStart.rxBytes - external.rxBytes),
-                    txBytes = maxOf(0L, totalSinceStart.txBytes - external.txBytes)
-                )
-            } else if (totalSinceStart.totalBytes > 0) {
-                // Fallback: NetworkStatsManager returned 0 but TrafficStats shows traffic.
-                // Treat ALL traffic as external (internet) to avoid showing 0.
-                Log.w(TAG, "NetworkStatsManager returned 0 for uid=$uid but TrafficStats=" +
-                    "${totalSinceStart.totalBytes}B — treating all as external (internet)")
-                external = totalSinceStart
-                internal = UsageBytes(0, 0)
-            } else {
-                // No traffic at all
-                external = UsageBytes(0, 0)
-                internal = UsageBytes(0, 0)
-            }
-
-            result[uid] = SplitUsage(external = external, internal = internal)
-        }
-
-        return result
-    }
-
-    /**
      * Capture TrafficStats baseline for all UIDs at session start.
-     * Required to calculate per-session internal traffic later.
      */
     fun captureBaseline(uids: List<Int>): Map<Int, UsageBytes> =
-        uids.associateWith { uid -> getTotalTrafficStatsUsage(uid) }
+        uids.associateWith { uid -> getTrafficStatsUsage(uid) }
 
     // ─── Private helpers ────────────────────────────────────────────────────
 
-    /**
-     * Query mobile data for a UID, trying multiple subscriberId strategies to
-     * handle Android Q+ restrictions on IMSI access.
-     *
-     * Strategy (ordered by preference):
-     *  1. null  — Android Q+ recommended (active subscription, no IMSI needed)
-     *  2. actual IMSI — pre-Q and some Q+ OEM implementations
-     *  3. ""    — some OEMs accept empty string instead of null
-     *
-     * Returns the result with the highest byte count (most complete data).
-     */
     private fun getMobileUsageForUid(uid: Int, startTime: Long, endTime: Long): UsageBytes {
         val subscriberIds = buildMobileSubscriberIds()
         return queryNetworkUsageForUid(
@@ -199,12 +170,10 @@ class NetworkUsageHelper @Inject constructor(
     private fun buildMobileSubscriberIds(): List<String?> {
         val ids = mutableListOf<String?>()
 
-        // Android Q+ (API 29+): null is recommended — system resolves active subscription
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ids.add(null)
         }
 
-        // Try actual IMSI/subscriberId (required pre-Q, works on many Q+ devices too)
         try {
             val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
             @Suppress("DEPRECATION")
@@ -212,21 +181,15 @@ class NetworkUsageHelper @Inject constructor(
             if (!subId.isNullOrEmpty()) ids.add(subId)
         } catch (_: Exception) {}
 
-        // Pre-Q: null as fallback if no subscriberId retrieved
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             ids.add(null)
         }
 
-        // Empty string — accepted on some OEM devices (Xiaomi, Samsung, etc.)
         ids.add("")
 
         return ids.distinct()
     }
 
-    /**
-     * Query NetworkStatsManager for a specific UID using queryDetailsForUid.
-     * Tries each subscriberId in order and returns the result with the most bytes.
-     */
     private fun queryNetworkUsageForUid(
         networkType: Int,
         subscriberIds: List<String?>,
@@ -252,15 +215,13 @@ class NetworkUsageHelper @Inject constructor(
                 }
                 stats.close()
             } catch (e: SecurityException) {
-                Log.e(TAG, "SecurityException querying networkType=$networkType uid=$uid — " +
-                    "is PACKAGE_USAGE_STATS granted?", e)
+                Log.e(TAG, "SecurityException: networkType=$networkType uid=$uid — PACKAGE_USAGE_STATS missing?", e)
                 continue
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to query networkType=$networkType uid=$uid subId=$subscriberId", e)
+                Log.w(TAG, "Query failed: networkType=$networkType uid=$uid subId=$subscriberId", e)
                 continue
             }
 
-            // Keep whichever subscriberId strategy yields the most data
             if (rx + tx > bestRx + bestTx) {
                 bestRx = rx
                 bestTx = tx

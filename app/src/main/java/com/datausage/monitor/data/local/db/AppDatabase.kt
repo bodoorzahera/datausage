@@ -24,7 +24,7 @@ import com.datausage.monitor.data.local.db.entity.SessionEntity
         DataLimitEntity::class,
         CostConfigEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

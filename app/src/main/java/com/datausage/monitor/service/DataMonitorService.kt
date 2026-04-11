@@ -80,7 +80,6 @@ class DataMonitorService : Service() {
     }
 
     private suspend fun startMonitoring() {
-        // Check for existing active session or create new one
         val existingSession = sessionRepository.getActiveSession(profileId)
         sessionId = if (existingSession != null) {
             existingSession.sessionId
@@ -88,43 +87,34 @@ class DataMonitorService : Service() {
             sessionRepository.startSession(profileId)
         }
 
-        // Save state for boot recovery
         prefs.edit()
             .putLong(KEY_ACTIVE_PROFILE_ID, profileId)
             .putLong(KEY_ACTIVE_SESSION_ID, sessionId)
             .apply()
 
-        // Capture TrafficStats baseline for internal traffic calculation
+        // Capture TrafficStats baseline for fallback
         val monitoredApps = usageRepository.getMonitoredAppsList(profileId)
         val uids = monitoredApps.map { it.uid }
         usageRepository.captureBaseline(profileId, uids)
 
-        // Start polling loop
         pollingJob = serviceScope.launch {
             val session = sessionRepository.getById(sessionId) ?: return@launch
             while (isActive) {
                 try {
-                    // Poll usage — gets split external/internal
                     usageRepository.pollUsage(sessionId, profileId, session.startTime)
 
-                    // Calculate totals from app usage snapshots
                     val appUsages = usageRepository.getUsageByAppForSession(sessionId)
-                    val externalRx = appUsages.sumOf { it.totalRx }
-                    val externalTx = appUsages.sumOf { it.totalTx }
-                    val internalRx = appUsages.sumOf { it.totalInternalRx }
-                    val internalTx = appUsages.sumOf { it.totalInternalTx }
+                    val wifiRx = appUsages.sumOf { it.totalWifiRx }
+                    val wifiTx = appUsages.sumOf { it.totalWifiTx }
+                    val mobileRx = appUsages.sumOf { it.totalMobileRx }
+                    val mobileTx = appUsages.sumOf { it.totalMobileTx }
 
-                    // Update session with split totals
                     sessionRepository.updateSessionUsage(
-                        sessionId, externalRx, externalTx, internalRx, internalTx
+                        sessionId, wifiRx, wifiTx, mobileRx, mobileTx
                     )
 
-                    // Notification shows ONLY external (internet) usage
-                    val externalTotal = externalRx + externalTx
-                    val internalTotal = internalRx + internalTx
-                    updateNotification(externalTotal, internalTotal)
+                    updateNotification(wifiRx + wifiTx, mobileRx + mobileTx)
 
-                    // Limits check against external usage only
                     checkLimits(profileId, appUsages)
 
                 } catch (e: Exception) {
@@ -136,12 +126,15 @@ class DataMonitorService : Service() {
         }
     }
 
-    private fun updateNotification(externalBytes: Long, internalBytes: Long) {
-        val text = "Internet: ${FormatUtils.formatBytes(externalBytes)}" +
-            if (internalBytes > 0) " | Local: ${FormatUtils.formatBytes(internalBytes)}" else ""
+    private fun updateNotification(wifiBytes: Long, mobileBytes: Long) {
+        val total = wifiBytes + mobileBytes
+        val parts = mutableListOf<String>()
+        parts.add("Total: ${FormatUtils.formatBytes(total)}")
+        if (wifiBytes > 0) parts.add("WiFi: ${FormatUtils.formatBytes(wifiBytes)}")
+        if (mobileBytes > 0) parts.add("Mobile: ${FormatUtils.formatBytes(mobileBytes)}")
 
         val notification = NotificationHelper.buildMonitoringNotification(
-            this, "Monitoring", text
+            this, "Monitoring", parts.joinToString(" | ")
         ).build()
 
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
@@ -153,11 +146,10 @@ class DataMonitorService : Service() {
         val now = System.currentTimeMillis()
 
         for (limit in limits) {
-            // Limits apply to EXTERNAL usage only
             val usage = when {
                 limit.packageName != null -> {
                     val appUsage = appUsages.find { it.packageName == limit.packageName }
-                    (appUsage?.totalRx ?: 0) + (appUsage?.totalTx ?: 0)
+                    appUsage?.totalBytes ?: 0
                 }
                 else -> {
                     val (from, to) = getPeriodRange(limit.periodType, now)
@@ -173,7 +165,7 @@ class DataMonitorService : Service() {
                 NotificationHelper.postExceededNotification(
                     this,
                     "Data Limit Exceeded!",
-                    "${limit.packageName ?: "Total"} internet: ${FormatUtils.formatBytes(usage)} / ${FormatUtils.formatBytes(limit.limitBytes)}",
+                    "${limit.packageName ?: "Total"}: ${FormatUtils.formatBytes(usage)} / ${FormatUtils.formatBytes(limit.limitBytes)}",
                     NotificationHelper.NOTIFICATION_ID_EXCEEDED + limit.id.toInt()
                 )
             } else if (percentUsed >= limit.warningPercent) {
@@ -223,7 +215,7 @@ class DataMonitorService : Service() {
         const val PREFS_NAME = "monitor_state"
         const val KEY_ACTIVE_PROFILE_ID = "active_profile_id"
         const val KEY_ACTIVE_SESSION_ID = "active_session_id"
-        const val POLL_INTERVAL_MS = 60_000L // 60 seconds
+        const val POLL_INTERVAL_MS = 60_000L
 
         fun start(context: Context, profileId: Long) {
             val intent = Intent(context, DataMonitorService::class.java).apply {

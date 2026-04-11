@@ -22,7 +22,7 @@ import javax.inject.Singleton
 
 @Serializable
 data class ExportData(
-    val version: Int = 1,
+    val version: Int = 2,
     val exportDate: String,
     val profiles: List<ExportProfile>
 )
@@ -48,8 +48,13 @@ data class ExportCostConfig(
 data class ExportSession(
     val startTime: Long,
     val endTime: Long? = null,
-    val totalBytesRx: Long,
-    val totalBytesTx: Long,
+    val wifiRx: Long = 0,
+    val wifiTx: Long = 0,
+    val mobileRx: Long = 0,
+    val mobileTx: Long = 0,
+    // Legacy fields for backwards compatibility on import
+    val totalBytesRx: Long = 0,
+    val totalBytesTx: Long = 0,
     val internalBytesRx: Long = 0,
     val internalBytesTx: Long = 0,
     val networkType: Int = 0,
@@ -60,8 +65,13 @@ data class ExportSession(
 data class ExportAppUsage(
     val packageName: String,
     val timestamp: Long,
-    val bytesRx: Long,
-    val bytesTx: Long,
+    val wifiRx: Long = 0,
+    val wifiTx: Long = 0,
+    val mobileRx: Long = 0,
+    val mobileTx: Long = 0,
+    // Legacy fields for backwards compatibility on import
+    val bytesRx: Long = 0,
+    val bytesTx: Long = 0,
     val internalRx: Long = 0,
     val internalTx: Long = 0
 )
@@ -121,21 +131,16 @@ class ImportExportRepository @Inject constructor(
         val profile = profileDao.getById(profileId) ?: return
         val writer = outputStream.bufferedWriter()
 
-        // Header
-        writer.write("Profile,Session ID,Start Time,End Time,App Package,Bytes Rx,Bytes Tx,Total Bytes,Internal Rx,Internal Tx,Internal Total\n")
+        writer.write("Profile,Session ID,Start Time,End Time,App Package,WiFi Rx,WiFi Tx,Mobile Rx,Mobile Tx,Total\n")
 
         val sessions = sessionDao.getSessionsInRange(profileId, 0, Long.MAX_VALUE)
         for (session in sessions) {
             val appUsages = appUsageDao.getUsageByAppForSession(session.sessionId)
             if (appUsages.isEmpty()) {
-                val extTotal = session.totalBytesRx + session.totalBytesTx
-                val intTotal = session.internalBytesRx + session.internalBytesTx
-                writer.write("${profile.name},${session.sessionId},${session.startTime},${session.endTime ?: ""},,,${extTotal},${session.internalBytesRx},${session.internalBytesTx},${intTotal}\n")
+                writer.write("${profile.name},${session.sessionId},${session.startTime},${session.endTime ?: ""},,,${session.wifiRx},${session.wifiTx},${session.mobileRx},${session.mobileTx},${session.totalBytes}\n")
             } else {
                 for (usage in appUsages) {
-                    val extTotal = usage.totalRx + usage.totalTx
-                    val intTotal = usage.totalInternalRx + usage.totalInternalTx
-                    writer.write("${profile.name},${session.sessionId},${session.startTime},${session.endTime ?: ""},${usage.packageName},${usage.totalRx},${usage.totalTx},${extTotal},${usage.totalInternalRx},${usage.totalInternalTx},${intTotal}\n")
+                    writer.write("${profile.name},${session.sessionId},${session.startTime},${session.endTime ?: ""},${usage.packageName},${usage.totalWifiRx},${usage.totalWifiTx},${usage.totalMobileRx},${usage.totalMobileTx},${usage.totalBytes}\n")
                 }
             }
         }
@@ -170,7 +175,7 @@ class ImportExportRepository @Inject constructor(
         }
 
         var importedRows = 0
-        val sessionMap = mutableMapOf<String, Long>() // csv sessionId -> db sessionId
+        val sessionMap = mutableMapOf<String, Long>()
 
         for (line in lines) {
             val parts = line.split(",")
@@ -180,11 +185,10 @@ class ImportExportRepository @Inject constructor(
             val startTime = parts[2].trim().toLongOrNull() ?: continue
             val endTime = parts[3].trim().toLongOrNull()
             val packageName = parts[4].trim()
-            val bytesRx = parts[5].trim().toLongOrNull() ?: 0
-            val bytesTx = parts[6].trim().toLongOrNull() ?: 0
-            // Internal fields (columns 8,9) — optional for backwards compatibility
-            val internalRx = parts.getOrNull(8)?.trim()?.toLongOrNull() ?: 0
-            val internalTx = parts.getOrNull(9)?.trim()?.toLongOrNull() ?: 0
+            val wifiRx = parts.getOrNull(5)?.trim()?.toLongOrNull() ?: 0
+            val wifiTx = parts.getOrNull(6)?.trim()?.toLongOrNull() ?: 0
+            val mobileRx = parts.getOrNull(7)?.trim()?.toLongOrNull() ?: 0
+            val mobileTx = parts.getOrNull(8)?.trim()?.toLongOrNull() ?: 0
 
             val dbSessionId = sessionMap.getOrPut(csvSessionId) {
                 sessionDao.insert(
@@ -192,10 +196,10 @@ class ImportExportRepository @Inject constructor(
                         profileId = profileId,
                         startTime = startTime,
                         endTime = endTime,
-                        totalBytesRx = bytesRx,
-                        totalBytesTx = bytesTx,
-                        internalBytesRx = internalRx,
-                        internalBytesTx = internalTx
+                        wifiRx = wifiRx,
+                        wifiTx = wifiTx,
+                        mobileRx = mobileRx,
+                        mobileTx = mobileTx
                     )
                 )
             }
@@ -207,10 +211,10 @@ class ImportExportRepository @Inject constructor(
                         monitoredAppId = 0,
                         packageName = packageName,
                         timestamp = startTime,
-                        bytesRx = bytesRx,
-                        bytesTx = bytesTx,
-                        internalRx = internalRx,
-                        internalTx = internalTx
+                        wifiRx = wifiRx,
+                        wifiTx = wifiTx,
+                        mobileRx = mobileRx,
+                        mobileTx = mobileTx
                     )
                 )
             }
@@ -238,19 +242,18 @@ class ImportExportRepository @Inject constructor(
                 ExportSession(
                     startTime = session.startTime,
                     endTime = session.endTime,
-                    totalBytesRx = session.totalBytesRx,
-                    totalBytesTx = session.totalBytesTx,
-                    internalBytesRx = session.internalBytesRx,
-                    internalBytesTx = session.internalBytesTx,
-                    networkType = session.networkType,
+                    wifiRx = session.wifiRx,
+                    wifiTx = session.wifiTx,
+                    mobileRx = session.mobileRx,
+                    mobileTx = session.mobileTx,
                     appUsage = appUsages.map { usage ->
                         ExportAppUsage(
                             packageName = usage.packageName,
                             timestamp = session.startTime,
-                            bytesRx = usage.totalRx,
-                            bytesTx = usage.totalTx,
-                            internalRx = usage.totalInternalRx,
-                            internalTx = usage.totalInternalTx
+                            wifiRx = usage.totalWifiRx,
+                            wifiTx = usage.totalWifiTx,
+                            mobileRx = usage.totalMobileRx,
+                            mobileTx = usage.totalMobileTx
                         )
                     }
                 )
@@ -279,7 +282,6 @@ class ImportExportRepository @Inject constructor(
             ProfileEntity(name = exportProfile.name, pin = exportProfile.pin)
         )
 
-        // Import cost config
         exportProfile.costConfig?.let {
             costConfigDao.insert(
                 CostConfigEntity(
@@ -291,7 +293,6 @@ class ImportExportRepository @Inject constructor(
             )
         }
 
-        // Import monitored apps
         val monitoredAppIds = mutableMapOf<String, Long>()
         for (app in exportProfile.monitoredApps) {
             val id = monitoredAppDao.insert(
@@ -305,31 +306,35 @@ class ImportExportRepository @Inject constructor(
             monitoredAppIds[app.packageName] = id
         }
 
-        // Import sessions and app usage
         for (exportSession in exportProfile.sessions) {
+            // Support legacy format: if wifiRx/mobileTx are 0 but old fields have data
+            val sWifiRx = if (exportSession.wifiRx > 0) exportSession.wifiRx else exportSession.totalBytesRx
+            val sWifiTx = if (exportSession.wifiTx > 0) exportSession.wifiTx else exportSession.totalBytesTx
+
             val sessionId = sessionDao.insert(
                 SessionEntity(
                     profileId = profileId,
                     startTime = exportSession.startTime,
                     endTime = exportSession.endTime,
-                    totalBytesRx = exportSession.totalBytesRx,
-                    totalBytesTx = exportSession.totalBytesTx,
-                    internalBytesRx = exportSession.internalBytesRx,
-                    internalBytesTx = exportSession.internalBytesTx,
-                    networkType = exportSession.networkType
+                    wifiRx = sWifiRx,
+                    wifiTx = sWifiTx,
+                    mobileRx = exportSession.mobileRx,
+                    mobileTx = exportSession.mobileTx
                 )
             )
 
             val appUsages = exportSession.appUsage.map { usage ->
+                val uWifiRx = if (usage.wifiRx > 0) usage.wifiRx else usage.bytesRx
+                val uWifiTx = if (usage.wifiTx > 0) usage.wifiTx else usage.bytesTx
                 AppUsageEntity(
                     sessionId = sessionId,
                     monitoredAppId = monitoredAppIds[usage.packageName] ?: 0,
                     packageName = usage.packageName,
                     timestamp = usage.timestamp,
-                    bytesRx = usage.bytesRx,
-                    bytesTx = usage.bytesTx,
-                    internalRx = usage.internalRx,
-                    internalTx = usage.internalTx
+                    wifiRx = uWifiRx,
+                    wifiTx = uWifiTx,
+                    mobileRx = usage.mobileRx,
+                    mobileTx = usage.mobileTx
                 )
             }
             if (appUsages.isNotEmpty()) {
@@ -337,7 +342,6 @@ class ImportExportRepository @Inject constructor(
             }
         }
 
-        // Import limits
         for (limit in exportProfile.limits) {
             dataLimitDao.insert(
                 DataLimitEntity(

@@ -25,6 +25,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -122,49 +123,88 @@ fun DashboardScreen(
                 }
             }
 
-            // Internet usage summary
-            Text("Internet Usage", style = MaterialTheme.typography.titleSmall)
+            // Network filter chips
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = state.networkFilter == NetworkFilter.ALL,
+                    onClick = { viewModel.setNetworkFilter(NetworkFilter.ALL) },
+                    label = { Text("All") }
+                )
+                FilterChip(
+                    selected = state.networkFilter == NetworkFilter.WIFI,
+                    onClick = { viewModel.setNetworkFilter(NetworkFilter.WIFI) },
+                    label = { Text("WiFi") }
+                )
+                FilterChip(
+                    selected = state.networkFilter == NetworkFilter.MOBILE,
+                    onClick = { viewModel.setNetworkFilter(NetworkFilter.MOBILE) },
+                    label = { Text("Mobile") }
+                )
+            }
+
+            // Usage summary based on filter
+            val filterLabel = when (state.networkFilter) {
+                NetworkFilter.ALL -> "Total Usage"
+                NetworkFilter.WIFI -> "WiFi Usage"
+                NetworkFilter.MOBILE -> "Mobile Usage"
+            }
+            Text(filterLabel, style = MaterialTheme.typography.titleSmall)
+
+            val todayFiltered = when (state.networkFilter) {
+                NetworkFilter.ALL -> state.todayUsage
+                NetworkFilter.WIFI -> state.todayWifi
+                NetworkFilter.MOBILE -> state.todayMobile
+            }
+            val weekFiltered = when (state.networkFilter) {
+                NetworkFilter.ALL -> state.weekUsage
+                NetworkFilter.WIFI -> state.weekWifi
+                NetworkFilter.MOBILE -> state.weekMobile
+            }
+            val monthFiltered = when (state.networkFilter) {
+                NetworkFilter.ALL -> state.monthUsage
+                NetworkFilter.WIFI -> state.monthWifi
+                NetworkFilter.MOBILE -> state.monthMobile
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 UsageSummaryCard(
                     label = "Today",
-                    value = FormatUtils.formatBytes(state.todayUsage),
+                    value = FormatUtils.formatBytes(todayFiltered),
                     modifier = Modifier.weight(1f)
                 )
                 UsageSummaryCard(
                     label = "This Week",
-                    value = FormatUtils.formatBytes(state.weekUsage),
+                    value = FormatUtils.formatBytes(weekFiltered),
                     modifier = Modifier.weight(1f)
                 )
                 UsageSummaryCard(
                     label = "This Month",
-                    value = FormatUtils.formatBytes(state.monthUsage),
+                    value = FormatUtils.formatBytes(monthFiltered),
                     modifier = Modifier.weight(1f)
                 )
             }
 
-            // Internal (local) usage summary — only show if there's any
-            if (state.todayInternal > 0 || state.weekInternal > 0 || state.monthInternal > 0) {
-                Text("Internal (Local) Usage", style = MaterialTheme.typography.titleSmall)
+            // WiFi/Mobile breakdown (show when filter is ALL)
+            if (state.networkFilter == NetworkFilter.ALL &&
+                (state.todayWifi > 0 || state.todayMobile > 0)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     UsageSummaryCard(
-                        label = "Today",
-                        value = FormatUtils.formatBytes(state.todayInternal),
+                        label = "WiFi Today",
+                        value = FormatUtils.formatBytes(state.todayWifi),
                         modifier = Modifier.weight(1f)
                     )
                     UsageSummaryCard(
-                        label = "This Week",
-                        value = FormatUtils.formatBytes(state.weekInternal),
-                        modifier = Modifier.weight(1f)
-                    )
-                    UsageSummaryCard(
-                        label = "This Month",
-                        value = FormatUtils.formatBytes(state.monthInternal),
+                        label = "Mobile Today",
+                        value = FormatUtils.formatBytes(state.todayMobile),
                         modifier = Modifier.weight(1f)
                     )
                 }

@@ -87,7 +87,7 @@ fun ReportsScreen(
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Internet Usage", style = MaterialTheme.typography.titleMedium)
+                        Text("Total Usage", style = MaterialTheme.typography.titleMedium)
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             FormatUtils.formatBytes(state.totalUsage),
@@ -102,13 +102,23 @@ fun ReportsScreen(
                             Text("Download: ${FormatUtils.formatBytes(state.totalRx)}")
                             Text("Upload: ${FormatUtils.formatBytes(state.totalTx)}")
                         }
-                        if (state.totalInternal > 0) {
+                        if (state.totalWifi > 0 || state.totalMobile > 0) {
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                "Internal (Local): ${FormatUtils.formatBytes(state.totalInternal)}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    "WiFi: ${FormatUtils.formatBytes(state.totalWifi)}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    "Mobile: ${FormatUtils.formatBytes(state.totalMobile)}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                         if (state.cost > 0) {
                             Spacer(modifier = Modifier.height(8.dp))
@@ -137,11 +147,9 @@ fun ReportsScreen(
                     )
                 }
 
-                val maxUsage = state.appUsages.maxOfOrNull { it.totalRx + it.totalTx } ?: 1L
+                val maxUsage = state.appUsages.maxOfOrNull { it.totalBytes } ?: 1L
 
                 items(state.appUsages) { usage ->
-                    val extTotal = usage.totalRx + usage.totalTx
-                    val intTotal = usage.totalInternalRx + usage.totalInternalTx
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(12.dp)) {
                             Row(
@@ -154,14 +162,14 @@ fun ReportsScreen(
                                     modifier = Modifier.weight(1f)
                                 )
                                 Text(
-                                    FormatUtils.formatBytes(extTotal),
+                                    FormatUtils.formatBytes(usage.totalBytes),
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.primary
                                 )
                             }
                             Spacer(modifier = Modifier.height(4.dp))
                             LinearProgressIndicator(
-                                progress = { extTotal.toFloat() / maxUsage.toFloat() },
+                                progress = { usage.totalBytes.toFloat() / maxUsage.toFloat() },
                                 modifier = Modifier.fillMaxWidth()
                             )
                             Row(
@@ -177,9 +185,9 @@ fun ReportsScreen(
                                     style = MaterialTheme.typography.labelSmall
                                 )
                             }
-                            if (intTotal > 0) {
+                            if (usage.wifiTotal > 0 && usage.mobileTotal > 0) {
                                 Text(
-                                    "Internal: ${FormatUtils.formatBytes(intTotal)}",
+                                    "WiFi: ${FormatUtils.formatBytes(usage.wifiTotal)} | Mobile: ${FormatUtils.formatBytes(usage.mobileTotal)}",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -224,7 +232,7 @@ fun ReportsScreen(
                                 }
                             }
                             Text(
-                                FormatUtils.formatBytes(session.totalBytesRx + session.totalBytesTx),
+                                FormatUtils.formatBytes(session.totalBytes),
                                 style = MaterialTheme.typography.titleSmall
                             )
                         }

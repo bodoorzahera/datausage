@@ -23,9 +23,14 @@ data class SessionEntity(
     val profileId: Long,
     val startTime: Long,
     val endTime: Long? = null,
-    val totalBytesRx: Long = 0,        // external (internet) download
-    val totalBytesTx: Long = 0,        // external (internet) upload
-    val internalBytesRx: Long = 0,     // internal (localhost/LAN) download
-    val internalBytesTx: Long = 0,     // internal (localhost/LAN) upload
-    val networkType: Int = 0 // 0=all, 1=wifi, 2=mobile
-)
+    val wifiRx: Long = 0,      // WiFi download
+    val wifiTx: Long = 0,      // WiFi upload
+    val mobileRx: Long = 0,    // Mobile download
+    val mobileTx: Long = 0     // Mobile upload
+) {
+    val totalRx: Long get() = wifiRx + mobileRx
+    val totalTx: Long get() = wifiTx + mobileTx
+    val totalBytes: Long get() = totalRx + totalTx
+    val wifiTotal: Long get() = wifiRx + wifiTx
+    val mobileTotal: Long get() = mobileRx + mobileTx
+}

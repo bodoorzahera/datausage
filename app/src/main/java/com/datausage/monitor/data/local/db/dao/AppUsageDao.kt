@@ -8,35 +8,39 @@ import kotlinx.coroutines.flow.Flow
 
 data class AppUsageSummary(
     val packageName: String,
-    val totalRx: Long,       // external download
-    val totalTx: Long,       // external upload
-    val totalInternalRx: Long,  // internal download
-    val totalInternalTx: Long   // internal upload
-)
+    val totalWifiRx: Long,
+    val totalWifiTx: Long,
+    val totalMobileRx: Long,
+    val totalMobileTx: Long
+) {
+    val wifiTotal: Long get() = totalWifiRx + totalWifiTx
+    val mobileTotal: Long get() = totalMobileRx + totalMobileTx
+    val totalRx: Long get() = totalWifiRx + totalMobileRx
+    val totalTx: Long get() = totalWifiTx + totalMobileTx
+    val totalBytes: Long get() = totalRx + totalTx
+}
 
 @Dao
 interface AppUsageDao {
 
-    // Values stored are cumulative since session start — use MAX() to get the latest (correct) total.
     @Query("""
         SELECT packageName,
-            MAX(bytesRx) as totalRx, MAX(bytesTx) as totalTx,
-            MAX(internalRx) as totalInternalRx, MAX(internalTx) as totalInternalTx
+            MAX(wifiRx) as totalWifiRx, MAX(wifiTx) as totalWifiTx,
+            MAX(mobileRx) as totalMobileRx, MAX(mobileTx) as totalMobileTx
         FROM app_usage WHERE sessionId = :sessionId
         GROUP BY packageName
-        ORDER BY (MAX(bytesRx) + MAX(bytesTx)) DESC
+        ORDER BY (MAX(wifiRx) + MAX(wifiTx) + MAX(mobileRx) + MAX(mobileTx)) DESC
     """)
     suspend fun getUsageByAppForSession(sessionId: Long): List<AppUsageSummary>
 
-    // Per-session MAX first, then SUM across sessions to avoid multiplying cumulative snapshots.
     @Query("""
         SELECT packageName,
-            SUM(maxRx) as totalRx, SUM(maxTx) as totalTx,
-            SUM(maxInternalRx) as totalInternalRx, SUM(maxInternalTx) as totalInternalTx
+            SUM(maxWifiRx) as totalWifiRx, SUM(maxWifiTx) as totalWifiTx,
+            SUM(maxMobileRx) as totalMobileRx, SUM(maxMobileTx) as totalMobileTx
         FROM (
             SELECT packageName,
-                MAX(bytesRx) as maxRx, MAX(bytesTx) as maxTx,
-                MAX(internalRx) as maxInternalRx, MAX(internalTx) as maxInternalTx
+                MAX(wifiRx) as maxWifiRx, MAX(wifiTx) as maxWifiTx,
+                MAX(mobileRx) as maxMobileRx, MAX(mobileTx) as maxMobileTx
             FROM app_usage
             WHERE sessionId IN (
                 SELECT sessionId FROM sessions
@@ -45,18 +49,18 @@ interface AppUsageDao {
             GROUP BY sessionId, packageName
         )
         GROUP BY packageName
-        ORDER BY (SUM(maxRx) + SUM(maxTx)) DESC
+        ORDER BY (SUM(maxWifiRx) + SUM(maxWifiTx) + SUM(maxMobileRx) + SUM(maxMobileTx)) DESC
     """)
     suspend fun getUsageByAppForPeriod(profileId: Long, from: Long, to: Long): List<AppUsageSummary>
 
     @Query("""
         SELECT packageName,
-            SUM(maxRx) as totalRx, SUM(maxTx) as totalTx,
-            SUM(maxInternalRx) as totalInternalRx, SUM(maxInternalTx) as totalInternalTx
+            SUM(maxWifiRx) as totalWifiRx, SUM(maxWifiTx) as totalWifiTx,
+            SUM(maxMobileRx) as totalMobileRx, SUM(maxMobileTx) as totalMobileTx
         FROM (
             SELECT packageName,
-                MAX(bytesRx) as maxRx, MAX(bytesTx) as maxTx,
-                MAX(internalRx) as maxInternalRx, MAX(internalTx) as maxInternalTx
+                MAX(wifiRx) as maxWifiRx, MAX(wifiTx) as maxWifiTx,
+                MAX(mobileRx) as maxMobileRx, MAX(mobileTx) as maxMobileTx
             FROM app_usage
             WHERE sessionId IN (
                 SELECT sessionId FROM sessions WHERE profileId = :profileId
@@ -78,7 +82,6 @@ interface AppUsageDao {
     @Insert
     suspend fun insertAll(usages: List<AppUsageEntity>)
 
-    /** Replace the current snapshot for a session with fresh data (keeps only latest per app). */
     @Query("DELETE FROM app_usage WHERE sessionId = :sessionId")
     suspend fun deleteForSession(sessionId: Long)
 

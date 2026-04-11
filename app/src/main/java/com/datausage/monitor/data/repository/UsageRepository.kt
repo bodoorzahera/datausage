@@ -46,19 +46,12 @@ class UsageRepository @Inject constructor(
         monitoredAppDao.insertAll(apps)
     }
 
-    /**
-     * Capture TrafficStats baseline when a session starts.
-     * Must be called before the first pollUsage() call.
-     */
     fun captureBaseline(profileId: Long, uids: List<Int>) {
         trafficBaseline = networkUsageHelper.captureBaseline(uids)
     }
 
     /**
-     * Poll usage with split: external (internet) vs internal (localhost/LAN).
-     *
-     * External = NetworkStatsManager (WiFi + Mobile interfaces)
-     * Internal = TrafficStats total - External
+     * Poll usage: queries WiFi and Mobile traffic separately per app.
      */
     suspend fun pollUsage(sessionId: Long, profileId: Long, sessionStartTime: Long) {
         val monitoredApps = monitoredAppDao.getMonitoredAppsList(profileId)
@@ -77,16 +70,14 @@ class UsageRepository @Inject constructor(
                 monitoredAppId = app.id,
                 packageName = app.packageName,
                 timestamp = now,
-                bytesRx = split.external.rxBytes,
-                bytesTx = split.external.txBytes,
-                internalRx = split.internal.rxBytes,
-                internalTx = split.internal.txBytes
+                wifiRx = split.wifi.rxBytes,
+                wifiTx = split.wifi.txBytes,
+                mobileRx = split.mobile.rxBytes,
+                mobileTx = split.mobile.txBytes
             )
         }
 
         if (usageEntities.isNotEmpty()) {
-            // Replace previous snapshot so each session holds exactly one row per app.
-            // Values are cumulative since session start, so keep only the latest.
             appUsageDao.deleteForSession(sessionId)
             appUsageDao.insertAll(usageEntities)
         }

@@ -30,35 +30,45 @@ interface SessionDao {
     """)
     suspend fun getSessionsInRange(profileId: Long, from: Long, to: Long): List<SessionEntity>
 
-    // External (internet) usage totals
+    // Total (WiFi + Mobile) usage
     @Query("""
-        SELECT COALESCE(SUM(totalBytesRx + totalBytesTx), 0) FROM sessions
+        SELECT COALESCE(SUM(wifiRx + wifiTx + mobileRx + mobileTx), 0) FROM sessions
         WHERE profileId = :profileId
         AND startTime >= :from AND (endTime <= :to OR endTime IS NULL)
     """)
     suspend fun getTotalUsageInRange(profileId: Long, from: Long, to: Long): Long
 
+    // WiFi only
     @Query("""
-        SELECT COALESCE(SUM(totalBytesRx), 0) FROM sessions
+        SELECT COALESCE(SUM(wifiRx + wifiTx), 0) FROM sessions
+        WHERE profileId = :profileId
+        AND startTime >= :from AND (endTime <= :to OR endTime IS NULL)
+    """)
+    suspend fun getWifiUsageInRange(profileId: Long, from: Long, to: Long): Long
+
+    // Mobile only
+    @Query("""
+        SELECT COALESCE(SUM(mobileRx + mobileTx), 0) FROM sessions
+        WHERE profileId = :profileId
+        AND startTime >= :from AND (endTime <= :to OR endTime IS NULL)
+    """)
+    suspend fun getMobileUsageInRange(profileId: Long, from: Long, to: Long): Long
+
+    // Download totals
+    @Query("""
+        SELECT COALESCE(SUM(wifiRx + mobileRx), 0) FROM sessions
         WHERE profileId = :profileId
         AND startTime >= :from AND (endTime <= :to OR endTime IS NULL)
     """)
     suspend fun getTotalRxInRange(profileId: Long, from: Long, to: Long): Long
 
+    // Upload totals
     @Query("""
-        SELECT COALESCE(SUM(totalBytesTx), 0) FROM sessions
+        SELECT COALESCE(SUM(wifiTx + mobileTx), 0) FROM sessions
         WHERE profileId = :profileId
         AND startTime >= :from AND (endTime <= :to OR endTime IS NULL)
     """)
     suspend fun getTotalTxInRange(profileId: Long, from: Long, to: Long): Long
-
-    // Internal (localhost/LAN) usage totals
-    @Query("""
-        SELECT COALESCE(SUM(internalBytesRx + internalBytesTx), 0) FROM sessions
-        WHERE profileId = :profileId
-        AND startTime >= :from AND (endTime <= :to OR endTime IS NULL)
-    """)
-    suspend fun getTotalInternalUsageInRange(profileId: Long, from: Long, to: Long): Long
 
     @Insert
     suspend fun insert(session: SessionEntity): Long

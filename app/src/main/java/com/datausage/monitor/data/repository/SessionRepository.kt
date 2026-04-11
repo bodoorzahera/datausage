@@ -28,14 +28,17 @@ class SessionRepository @Inject constructor(
     suspend fun getTotalUsageInRange(profileId: Long, from: Long, to: Long): Long =
         sessionDao.getTotalUsageInRange(profileId, from, to)
 
+    suspend fun getWifiUsageInRange(profileId: Long, from: Long, to: Long): Long =
+        sessionDao.getWifiUsageInRange(profileId, from, to)
+
+    suspend fun getMobileUsageInRange(profileId: Long, from: Long, to: Long): Long =
+        sessionDao.getMobileUsageInRange(profileId, from, to)
+
     suspend fun getTotalRxInRange(profileId: Long, from: Long, to: Long): Long =
         sessionDao.getTotalRxInRange(profileId, from, to)
 
     suspend fun getTotalTxInRange(profileId: Long, from: Long, to: Long): Long =
         sessionDao.getTotalTxInRange(profileId, from, to)
-
-    suspend fun getTotalInternalUsageInRange(profileId: Long, from: Long, to: Long): Long =
-        sessionDao.getTotalInternalUsageInRange(profileId, from, to)
 
     suspend fun startSession(profileId: Long): Long {
         return sessionDao.insert(
@@ -55,18 +58,18 @@ class SessionRepository @Inject constructor(
 
     suspend fun updateSessionUsage(
         sessionId: Long,
-        externalRx: Long,
-        externalTx: Long,
-        internalRx: Long,
-        internalTx: Long
+        wifiRx: Long,
+        wifiTx: Long,
+        mobileRx: Long,
+        mobileTx: Long
     ) {
         val session = sessionDao.getById(sessionId) ?: return
         sessionDao.update(
             session.copy(
-                totalBytesRx = externalRx,
-                totalBytesTx = externalTx,
-                internalBytesRx = internalRx,
-                internalBytesTx = internalTx
+                wifiRx = wifiRx,
+                wifiTx = wifiTx,
+                mobileRx = mobileRx,
+                mobileTx = mobileTx
             )
         )
     }

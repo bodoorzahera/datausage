@@ -84,8 +84,6 @@ fun SessionScreen(
                     ) {
                         if (isRunning && activeSession != null) {
                             val s = activeSession!!
-                            val extTotal = s.totalBytesRx + s.totalBytesTx
-                            val intTotal = s.internalBytesRx + s.internalBytesTx
                             Text(
                                 "Session Active",
                                 style = MaterialTheme.typography.titleLarge
@@ -93,23 +91,24 @@ fun SessionScreen(
                             Spacer(modifier = Modifier.height(8.dp))
                             Text("Started: ${FormatUtils.formatDateTime(s.startTime)}")
                             Text(
-                                "Internet: ${FormatUtils.formatBytes(extTotal)}",
+                                "Total: ${FormatUtils.formatBytes(s.totalBytes)}",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.primary
                             )
                             Text(
-                                "Down: ${FormatUtils.formatBytes(s.totalBytesRx)} / Up: ${FormatUtils.formatBytes(s.totalBytesTx)}"
+                                "Down: ${FormatUtils.formatBytes(s.totalRx)} / Up: ${FormatUtils.formatBytes(s.totalTx)}"
                             )
-                            if (intTotal > 0) {
-                                Spacer(modifier = Modifier.height(4.dp))
+                            if (s.wifiTotal > 0) {
                                 Text(
-                                    "Internal (Local): ${FormatUtils.formatBytes(intTotal)}",
+                                    "WiFi: ${FormatUtils.formatBytes(s.wifiTotal)}",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                            }
+                            if (s.mobileTotal > 0) {
                                 Text(
-                                    "Down: ${FormatUtils.formatBytes(s.internalBytesRx)} / Up: ${FormatUtils.formatBytes(s.internalBytesTx)}",
-                                    style = MaterialTheme.typography.bodySmall,
+                                    "Mobile: ${FormatUtils.formatBytes(s.mobileTotal)}",
+                                    style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
@@ -149,8 +148,6 @@ fun SessionScreen(
                     )
                 }
                 items(appUsages) { usage ->
-                    val extTotal = usage.totalRx + usage.totalTx
-                    val intTotal = usage.totalInternalRx + usage.totalInternalTx
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(12.dp)) {
                             Row(
@@ -162,13 +159,13 @@ fun SessionScreen(
                                     modifier = Modifier.weight(1f)
                                 )
                                 Text(
-                                    FormatUtils.formatBytes(extTotal),
+                                    FormatUtils.formatBytes(usage.totalBytes),
                                     color = MaterialTheme.colorScheme.primary
                                 )
                             }
-                            if (intTotal > 0) {
+                            if (usage.wifiTotal > 0 && usage.mobileTotal > 0) {
                                 Text(
-                                    "Internal: ${FormatUtils.formatBytes(intTotal)}",
+                                    "WiFi: ${FormatUtils.formatBytes(usage.wifiTotal)} | Mobile: ${FormatUtils.formatBytes(usage.mobileTotal)}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -199,8 +196,6 @@ fun SessionScreen(
 
 @Composable
 private fun SessionHistoryCard(session: SessionEntity) {
-    val extTotal = session.totalBytesRx + session.totalBytesTx
-    val intTotal = session.internalBytesRx + session.internalBytesTx
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(
@@ -213,13 +208,20 @@ private fun SessionHistoryCard(session: SessionEntity) {
                 )
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        "Internet: ${FormatUtils.formatBytes(extTotal)}",
+                        "Total: ${FormatUtils.formatBytes(session.totalBytes)}",
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.primary
                     )
-                    if (intTotal > 0) {
+                    if (session.wifiTotal > 0) {
                         Text(
-                            "Internal: ${FormatUtils.formatBytes(intTotal)}",
+                            "WiFi: ${FormatUtils.formatBytes(session.wifiTotal)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (session.mobileTotal > 0) {
+                        Text(
+                            "Mobile: ${FormatUtils.formatBytes(session.mobileTotal)}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

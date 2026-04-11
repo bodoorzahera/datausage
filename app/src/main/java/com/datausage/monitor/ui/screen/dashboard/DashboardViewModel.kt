@@ -20,16 +20,22 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+enum class NetworkFilter { ALL, WIFI, MOBILE }
+
 data class DashboardState(
     val profile: ProfileEntity? = null,
     val activeSession: SessionEntity? = null,
     val isMonitoring: Boolean = false,
-    val todayUsage: Long = 0,         // external (internet)
-    val weekUsage: Long = 0,          // external (internet)
-    val monthUsage: Long = 0,         // external (internet)
-    val todayInternal: Long = 0,      // internal (local)
-    val weekInternal: Long = 0,       // internal (local)
-    val monthInternal: Long = 0,      // internal (local)
+    val networkFilter: NetworkFilter = NetworkFilter.ALL,
+    val todayUsage: Long = 0,
+    val weekUsage: Long = 0,
+    val monthUsage: Long = 0,
+    val todayWifi: Long = 0,
+    val weekWifi: Long = 0,
+    val monthWifi: Long = 0,
+    val todayMobile: Long = 0,
+    val weekMobile: Long = 0,
+    val monthMobile: Long = 0,
     val todayCost: CostSummary? = null,
     val monthCost: CostSummary? = null
 )
@@ -60,6 +66,10 @@ class DashboardViewModel @Inject constructor(
         }
     }
 
+    fun setNetworkFilter(filter: NetworkFilter) {
+        _state.value = _state.value.copy(networkFilter = filter)
+    }
+
     private suspend fun refresh() {
         val profile = profileRepository.getById(profileId)
         val activeSession = sessionRepository.getActiveSession(profileId)
@@ -72,29 +82,34 @@ class DashboardViewModel @Inject constructor(
         val monthStart = FormatUtils.startOfMonth(now)
         val monthEnd = FormatUtils.endOfMonth(now)
 
-        // External (internet) usage
-        val todayUsage = sessionRepository.getTotalUsageInRange(profileId, dayStart, dayEnd)
-        val weekUsage = sessionRepository.getTotalUsageInRange(profileId, weekStart, weekEnd)
-        val monthUsage = sessionRepository.getTotalUsageInRange(profileId, monthStart, monthEnd)
+        val todayTotal = sessionRepository.getTotalUsageInRange(profileId, dayStart, dayEnd)
+        val weekTotal = sessionRepository.getTotalUsageInRange(profileId, weekStart, weekEnd)
+        val monthTotal = sessionRepository.getTotalUsageInRange(profileId, monthStart, monthEnd)
 
-        // Internal (local) usage
-        val todayInternal = sessionRepository.getTotalInternalUsageInRange(profileId, dayStart, dayEnd)
-        val weekInternal = sessionRepository.getTotalInternalUsageInRange(profileId, weekStart, weekEnd)
-        val monthInternal = sessionRepository.getTotalInternalUsageInRange(profileId, monthStart, monthEnd)
+        val todayWifi = sessionRepository.getWifiUsageInRange(profileId, dayStart, dayEnd)
+        val weekWifi = sessionRepository.getWifiUsageInRange(profileId, weekStart, weekEnd)
+        val monthWifi = sessionRepository.getWifiUsageInRange(profileId, monthStart, monthEnd)
+
+        val todayMobile = sessionRepository.getMobileUsageInRange(profileId, dayStart, dayEnd)
+        val weekMobile = sessionRepository.getMobileUsageInRange(profileId, weekStart, weekEnd)
+        val monthMobile = sessionRepository.getMobileUsageInRange(profileId, monthStart, monthEnd)
 
         val todayCost = costRepository.calculateCostForPeriod(profileId, dayStart, dayEnd)
         val monthCost = costRepository.calculateCostForPeriod(profileId, monthStart, monthEnd)
 
-        _state.value = DashboardState(
+        _state.value = _state.value.copy(
             profile = profile,
             activeSession = activeSession,
             isMonitoring = activeSession != null,
-            todayUsage = todayUsage,
-            weekUsage = weekUsage,
-            monthUsage = monthUsage,
-            todayInternal = todayInternal,
-            weekInternal = weekInternal,
-            monthInternal = monthInternal,
+            todayUsage = todayTotal,
+            weekUsage = weekTotal,
+            monthUsage = monthTotal,
+            todayWifi = todayWifi,
+            weekWifi = weekWifi,
+            monthWifi = monthWifi,
+            todayMobile = todayMobile,
+            weekMobile = weekMobile,
+            monthMobile = monthMobile,
             todayCost = todayCost,
             monthCost = monthCost
         )

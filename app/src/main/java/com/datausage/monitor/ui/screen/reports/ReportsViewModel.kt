@@ -19,10 +19,11 @@ enum class ReportPeriod { DAY, WEEK, MONTH }
 
 data class ReportState(
     val period: ReportPeriod = ReportPeriod.DAY,
-    val totalUsage: Long = 0,        // external (internet)
-    val totalRx: Long = 0,           // external download
-    val totalTx: Long = 0,           // external upload
-    val totalInternal: Long = 0,     // internal (local)
+    val totalUsage: Long = 0,
+    val totalRx: Long = 0,
+    val totalTx: Long = 0,
+    val totalWifi: Long = 0,
+    val totalMobile: Long = 0,
     val cost: Double = 0.0,
     val currency: String = "USD",
     val sessions: List<SessionEntity> = emptyList(),
@@ -61,7 +62,8 @@ class ReportsViewModel @Inject constructor(
 
             val totalRx = sessionRepository.getTotalRxInRange(profileId, from, to)
             val totalTx = sessionRepository.getTotalTxInRange(profileId, from, to)
-            val totalInternal = sessionRepository.getTotalInternalUsageInRange(profileId, from, to)
+            val totalWifi = sessionRepository.getWifiUsageInRange(profileId, from, to)
+            val totalMobile = sessionRepository.getMobileUsageInRange(profileId, from, to)
             val sessions = sessionRepository.getSessionsInRange(profileId, from, to)
             val appUsages = usageRepository.getUsageByAppForPeriod(profileId, from, to)
             val costSummary = costRepository.calculateCostForPeriod(profileId, from, to)
@@ -71,7 +73,8 @@ class ReportsViewModel @Inject constructor(
                 totalUsage = totalRx + totalTx,
                 totalRx = totalRx,
                 totalTx = totalTx,
-                totalInternal = totalInternal,
+                totalWifi = totalWifi,
+                totalMobile = totalMobile,
                 cost = costSummary?.cost ?: 0.0,
                 currency = costSummary?.currency ?: "USD",
                 sessions = sessions,
