@@ -61,15 +61,16 @@ class NetworkUsageHelper @Inject constructor(
     /**
      * Get split usage for all monitored UIDs.
      *
-     * Strategy (ordered by reliability):
-     *  1. queryDetails() — iterates ALL buckets, filter by target UIDs
-     *     This works on MORE devices than queryDetailsForUid (known OEM bugs)
-     *  2. queryDetailsForUid() — per-UID query (more efficient but buggy on some ROMs)
-     *  3. TrafficStats delta — real-time fallback (no WiFi/Mobile split possible)
+     * KEY INSIGHT: TrafficStats is REAL-TIME and always accurate for the TOTAL.
+     * NetworkStatsManager has delay (up to 2 hours!) but gives WiFi/Mobile split.
      *
-     * WiFi subscriberIds tried: [null, ""] — some OEMs need empty string
-     * Mobile subscriberIds: [null (Q+), actual IMSI, ""]
-     * Time buffer: 3 min subtracted from startTime to account for Android's delayed writes
+     * Strategy:
+     *  1. TrafficStats delta = PRIMARY source for total bytes (always real-time)
+     *  2. NetworkStatsManager = used ONLY to determine WiFi vs Mobile split ratio
+     *  3. If NetworkStatsManager total >= TrafficStats: use NetworkStatsManager directly
+     *  4. If NetworkStatsManager total < TrafficStats: use TrafficStats as total,
+     *     split proportionally using NetworkStatsManager's WiFi/Mobile ratio
+     *  5. If NetworkStatsManager = 0: report all TrafficStats traffic as WiFi
      */
     fun getAllAppsSplitUsage(
         uids: List<Int>,
@@ -78,16 +79,13 @@ class NetworkUsageHelper @Inject constructor(
         endTime: Long = System.currentTimeMillis()
     ): Map<Int, SplitUsage> {
         val hasPermission = hasUsageStatsPermission()
-        if (!hasPermission) {
-            Log.w(TAG, "PACKAGE_USAGE_STATS not granted — falling back to TrafficStats only")
-        }
 
         val result = mutableMapOf<Int, SplitUsage>()
 
         // Apply time buffer to catch recently-written stats
         val bufferedStart = maxOf(0L, startTime - QUERY_TIME_BUFFER_MS)
 
-        // Strategy 1: Batch query using queryDetails (all UIDs at once)
+        // NetworkStatsManager batch query (for WiFi/Mobile split)
         var wifiByUid = emptyMap<Int, UsageBytes>()
         var mobileByUid = emptyMap<Int, UsageBytes>()
 
@@ -95,39 +93,66 @@ class NetworkUsageHelper @Inject constructor(
             val uidSet = uids.toSet()
             wifiByUid = queryBulkUsage(ConnectivityManager.TYPE_WIFI, buildWifiSubscriberIds(), uidSet, bufferedStart, endTime)
             mobileByUid = queryBulkUsage(ConnectivityManager.TYPE_MOBILE, buildMobileSubscriberIds(), uidSet, bufferedStart, endTime)
-
-            Log.d(TAG, "queryDetails: wifi=${wifiByUid.values.sumOf { it.totalBytes }}B, " +
-                "mobile=${mobileByUid.values.sumOf { it.totalBytes }}B for ${uids.size} UIDs")
         }
 
-        // Strategy 2: Per-UID queryDetailsForUid as fallback for UIDs that returned 0
         for (uid in uids) {
-            var wifi = wifiByUid[uid] ?: UsageBytes(0, 0)
-            var mobile = mobileByUid[uid] ?: UsageBytes(0, 0)
+            // PRIMARY: TrafficStats delta (real-time, always accurate)
+            val currentTotal = getTrafficStatsUsage(uid)
+            val baseline = baselineTraffic[uid] ?: UsageBytes(0, 0)
+            val trafficStatsDelta = UsageBytes(
+                rxBytes = maxOf(0L, currentTotal.rxBytes - baseline.rxBytes),
+                txBytes = maxOf(0L, currentTotal.txBytes - baseline.txBytes)
+            )
 
-            // If batch query returned 0 for this UID, try per-UID query
-            if (hasPermission && wifi.totalBytes == 0L && mobile.totalBytes == 0L) {
-                wifi = queryPerUidUsage(ConnectivityManager.TYPE_WIFI, buildWifiSubscriberIds(), uid, bufferedStart, endTime)
-                mobile = queryPerUidUsage(ConnectivityManager.TYPE_MOBILE, buildMobileSubscriberIds(), uid, bufferedStart, endTime)
-                if (wifi.totalBytes > 0 || mobile.totalBytes > 0) {
-                    Log.d(TAG, "queryDetailsForUid fallback worked for uid=$uid: wifi=${wifi.totalBytes}B mobile=${mobile.totalBytes}B")
-                }
+            // SECONDARY: NetworkStatsManager (for WiFi/Mobile split)
+            var nsWifi = wifiByUid[uid] ?: UsageBytes(0, 0)
+            var nsMobile = mobileByUid[uid] ?: UsageBytes(0, 0)
+
+            // Per-UID fallback if batch returned 0
+            if (hasPermission && nsWifi.totalBytes == 0L && nsMobile.totalBytes == 0L) {
+                nsWifi = queryPerUidUsage(ConnectivityManager.TYPE_WIFI, buildWifiSubscriberIds(), uid, bufferedStart, endTime)
+                nsMobile = queryPerUidUsage(ConnectivityManager.TYPE_MOBILE, buildMobileSubscriberIds(), uid, bufferedStart, endTime)
             }
 
-            // Strategy 3: TrafficStats delta as last resort
-            if (wifi.totalBytes == 0L && mobile.totalBytes == 0L) {
-                val currentTotal = getTrafficStatsUsage(uid)
-                val baseline = baselineTraffic[uid] ?: UsageBytes(0, 0)
-                val delta = UsageBytes(
-                    rxBytes = maxOf(0L, currentTotal.rxBytes - baseline.rxBytes),
-                    txBytes = maxOf(0L, currentTotal.txBytes - baseline.txBytes)
-                )
-                if (delta.totalBytes > 0) {
-                    Log.d(TAG, "TrafficStats fallback for uid=$uid: ${delta.totalBytes}B (current=${currentTotal.totalBytes}, baseline=${baseline.totalBytes})")
-                    // Can't distinguish wifi/mobile from TrafficStats, report as wifi
-                    wifi = delta
-                } else {
-                    Log.d(TAG, "All methods returned 0 for uid=$uid (TrafficStats current=${currentTotal.totalBytes}, baseline=${baseline.totalBytes})")
+            val nsTotal = nsWifi.totalBytes + nsMobile.totalBytes
+            val tsTotal = trafficStatsDelta.totalBytes
+
+            val wifi: UsageBytes
+            val mobile: UsageBytes
+
+            when {
+                // Case 1: NetworkStatsManager has MORE data (rare, but trust it)
+                nsTotal >= tsTotal && nsTotal > 0 -> {
+                    wifi = nsWifi
+                    mobile = nsMobile
+                }
+                // Case 2: TrafficStats has more (normal — NetworkStatsManager is delayed)
+                // Use TrafficStats total, split by NetworkStatsManager ratio
+                tsTotal > 0 && nsTotal > 0 -> {
+                    val wifiRatio = nsWifi.totalBytes.toDouble() / nsTotal
+                    val mobileRatio = nsMobile.totalBytes.toDouble() / nsTotal
+                    wifi = UsageBytes(
+                        rxBytes = (trafficStatsDelta.rxBytes * wifiRatio).toLong(),
+                        txBytes = (trafficStatsDelta.txBytes * wifiRatio).toLong()
+                    )
+                    mobile = UsageBytes(
+                        rxBytes = (trafficStatsDelta.rxBytes * mobileRatio).toLong(),
+                        txBytes = (trafficStatsDelta.txBytes * mobileRatio).toLong()
+                    )
+                    Log.d(TAG, "uid=$uid: TrafficStats=${tsTotal}B > NetworkStats=${nsTotal}B, " +
+                        "split ratio wifi=${(wifiRatio*100).toInt()}% mobile=${(mobileRatio*100).toInt()}%")
+                }
+                // Case 3: NetworkStatsManager returned 0, only TrafficStats has data
+                tsTotal > 0 -> {
+                    // Can't determine split, report all as wifi
+                    wifi = trafficStatsDelta
+                    mobile = UsageBytes(0, 0)
+                    Log.d(TAG, "uid=$uid: TrafficStats=${tsTotal}B, NetworkStats=0 — reporting all as WiFi")
+                }
+                // Case 4: No traffic at all
+                else -> {
+                    wifi = UsageBytes(0, 0)
+                    mobile = UsageBytes(0, 0)
                 }
             }
 
