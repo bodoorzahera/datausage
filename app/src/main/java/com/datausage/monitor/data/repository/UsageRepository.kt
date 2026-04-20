@@ -6,6 +6,7 @@ import com.datausage.monitor.data.local.db.dao.MonitoredAppDao
 import com.datausage.monitor.data.local.db.entity.AppUsageEntity
 import com.datausage.monitor.data.local.db.entity.MonitoredAppEntity
 import com.datausage.monitor.util.NetworkUsageHelper
+import com.datausage.monitor.util.SplitUsage
 import com.datausage.monitor.util.UsageBytes
 import kotlinx.coroutines.flow.Flow
 import javax.inject.Inject
@@ -19,6 +20,8 @@ class UsageRepository @Inject constructor(
 ) {
     // Baseline TrafficStats captured at session start, keyed by UID
     private var trafficBaseline: Map<Int, UsageBytes> = emptyMap()
+    // Baseline NetworkStatsManager (epoch-0 cumulative) captured at session start
+    private var nsBaseline: Map<Int, SplitUsage> = emptyMap()
 
     fun getMonitoredApps(profileId: Long): Flow<List<MonitoredAppEntity>> =
         monitoredAppDao.getMonitoredApps(profileId)
@@ -48,6 +51,7 @@ class UsageRepository @Inject constructor(
 
     fun captureBaseline(profileId: Long, uids: List<Int>) {
         trafficBaseline = networkUsageHelper.captureBaseline(uids)
+        nsBaseline = networkUsageHelper.captureNsBaseline(uids)
     }
 
     /**
@@ -59,7 +63,7 @@ class UsageRepository @Inject constructor(
 
         val uids = monitoredApps.map { it.uid }
         val splitUsageMap = networkUsageHelper.getAllAppsSplitUsage(
-            uids, sessionStartTime, trafficBaseline
+            uids, sessionStartTime, trafficBaseline, nsBaseline
         )
 
         val now = System.currentTimeMillis()

@@ -15,13 +15,6 @@ import javax.inject.Singleton
 
 private const val TAG = "NetworkUsageHelper"
 
-/**
- * Buffer subtracted from startTime when querying NetworkStatsManager.
- * Android batches stats writes, so very recent data may not appear yet.
- * 3 minutes buffer ensures we catch recently-written data.
- */
-private const val QUERY_TIME_BUFFER_MS = 3 * 60 * 1000L
-
 data class AppInfo(
     val packageName: String,
     val appName: String,
@@ -61,95 +54,94 @@ class NetworkUsageHelper @Inject constructor(
     /**
      * Get split usage for all monitored UIDs.
      *
-     * KEY INSIGHT: TrafficStats is REAL-TIME and always accurate for the TOTAL.
-     * NetworkStatsManager has delay (up to 2 hours!) but gives WiFi/Mobile split.
+     * ROOT CAUSE OF UNDER-COUNTING:
+     * NetworkStatsManager writes data in "buckets" (time windows).
+     * Querying from startTime→now MISSES data in the current open bucket
+     * because it hasn't been finalized yet (can take up to 2 hours!).
      *
-     * Strategy:
-     *  1. TrafficStats delta = PRIMARY source for total bytes (always real-time)
-     *  2. NetworkStatsManager = used ONLY to determine WiFi vs Mobile split ratio
-     *  3. If NetworkStatsManager total >= TrafficStats: use NetworkStatsManager directly
-     *  4. If NetworkStatsManager total < TrafficStats: use TrafficStats as total,
-     *     split proportionally using NetworkStatsManager's WiFi/Mobile ratio
-     *  5. If NetworkStatsManager = 0: report all TrafficStats traffic as WiFi
+     * THE FIX (same approach as Android Settings > Data Usage):
+     * Query from epoch 0 → now (cumulative total) and subtract a baseline
+     * captured at session start using NetworkStatsManager (not TrafficStats).
+     * This way we always include the current open bucket.
+     *
+     * Fallback: TrafficStats delta for UIDs where NetworkStatsManager returns 0.
      */
     fun getAllAppsSplitUsage(
         uids: List<Int>,
         startTime: Long,
         baselineTraffic: Map<Int, UsageBytes>,
+        nsBaseline: Map<Int, SplitUsage>,
         endTime: Long = System.currentTimeMillis()
     ): Map<Int, SplitUsage> {
         val hasPermission = hasUsageStatsPermission()
-
         val result = mutableMapOf<Int, SplitUsage>()
 
-        // Apply time buffer to catch recently-written stats
-        val bufferedStart = maxOf(0L, startTime - QUERY_TIME_BUFFER_MS)
-
-        // NetworkStatsManager batch query (for WiFi/Mobile split)
-        var wifiByUid = emptyMap<Int, UsageBytes>()
-        var mobileByUid = emptyMap<Int, UsageBytes>()
+        // Query cumulative totals from epoch 0 → now (avoids open-bucket problem)
+        var wifiCumulative = emptyMap<Int, UsageBytes>()
+        var mobileCumulative = emptyMap<Int, UsageBytes>()
 
         if (hasPermission) {
             val uidSet = uids.toSet()
-            wifiByUid = queryBulkUsage(ConnectivityManager.TYPE_WIFI, buildWifiSubscriberIds(), uidSet, bufferedStart, endTime)
-            mobileByUid = queryBulkUsage(ConnectivityManager.TYPE_MOBILE, buildMobileSubscriberIds(), uidSet, bufferedStart, endTime)
+            wifiCumulative = queryBulkUsage(ConnectivityManager.TYPE_WIFI, buildWifiSubscriberIds(), uidSet, 0L, endTime)
+            mobileCumulative = queryBulkUsage(ConnectivityManager.TYPE_MOBILE, buildMobileSubscriberIds(), uidSet, 0L, endTime)
         }
 
         for (uid in uids) {
-            // PRIMARY: TrafficStats delta (real-time, always accurate)
-            val currentTotal = getTrafficStatsUsage(uid)
-            val baseline = baselineTraffic[uid] ?: UsageBytes(0, 0)
-            val trafficStatsDelta = UsageBytes(
-                rxBytes = maxOf(0L, currentTotal.rxBytes - baseline.rxBytes),
-                txBytes = maxOf(0L, currentTotal.txBytes - baseline.txBytes)
+            // NetworkStatsManager delta = cumulative_now - cumulative_at_session_start
+            val nsBase = nsBaseline[uid] ?: SplitUsage(UsageBytes(0, 0), UsageBytes(0, 0))
+            val wifiNow = wifiCumulative[uid] ?: UsageBytes(0, 0)
+            val mobileNow = mobileCumulative[uid] ?: UsageBytes(0, 0)
+
+            var nsWifi = UsageBytes(
+                rxBytes = maxOf(0L, wifiNow.rxBytes - nsBase.wifi.rxBytes),
+                txBytes = maxOf(0L, wifiNow.txBytes - nsBase.wifi.txBytes)
+            )
+            var nsMobile = UsageBytes(
+                rxBytes = maxOf(0L, mobileNow.rxBytes - nsBase.mobile.rxBytes),
+                txBytes = maxOf(0L, mobileNow.txBytes - nsBase.mobile.txBytes)
             )
 
-            // SECONDARY: NetworkStatsManager (for WiFi/Mobile split)
-            var nsWifi = wifiByUid[uid] ?: UsageBytes(0, 0)
-            var nsMobile = mobileByUid[uid] ?: UsageBytes(0, 0)
-
-            // Per-UID fallback if batch returned 0
+            // Per-UID fallback if bulk query returned 0
             if (hasPermission && nsWifi.totalBytes == 0L && nsMobile.totalBytes == 0L) {
-                nsWifi = queryPerUidUsage(ConnectivityManager.TYPE_WIFI, buildWifiSubscriberIds(), uid, bufferedStart, endTime)
-                nsMobile = queryPerUidUsage(ConnectivityManager.TYPE_MOBILE, buildMobileSubscriberIds(), uid, bufferedStart, endTime)
+                val wifiPerUid = queryPerUidUsage(ConnectivityManager.TYPE_WIFI, buildWifiSubscriberIds(), uid, 0L, endTime)
+                val mobilePerUid = queryPerUidUsage(ConnectivityManager.TYPE_MOBILE, buildMobileSubscriberIds(), uid, 0L, endTime)
+                nsWifi = UsageBytes(
+                    rxBytes = maxOf(0L, wifiPerUid.rxBytes - nsBase.wifi.rxBytes),
+                    txBytes = maxOf(0L, wifiPerUid.txBytes - nsBase.wifi.txBytes)
+                )
+                nsMobile = UsageBytes(
+                    rxBytes = maxOf(0L, mobilePerUid.rxBytes - nsBase.mobile.rxBytes),
+                    txBytes = maxOf(0L, mobilePerUid.txBytes - nsBase.mobile.txBytes)
+                )
             }
 
             val nsTotal = nsWifi.totalBytes + nsMobile.totalBytes
-            val tsTotal = trafficStatsDelta.totalBytes
+
+            // TrafficStats delta for fallback (real-time but no WiFi/Mobile split)
+            val currentTs = getTrafficStatsUsage(uid)
+            val tsBase = baselineTraffic[uid] ?: UsageBytes(0, 0)
+            val tsDelta = UsageBytes(
+                rxBytes = maxOf(0L, currentTs.rxBytes - tsBase.rxBytes),
+                txBytes = maxOf(0L, currentTs.txBytes - tsBase.txBytes)
+            )
+            val tsTotal = tsDelta.totalBytes
 
             val wifi: UsageBytes
             val mobile: UsageBytes
 
             when {
-                // Case 1: NetworkStatsManager has MORE data (rare, but trust it)
-                nsTotal >= tsTotal && nsTotal > 0 -> {
+                nsTotal > 0 -> {
+                    // NetworkStatsManager has data — use it (accurate WiFi/Mobile split)
                     wifi = nsWifi
                     mobile = nsMobile
+                    Log.d(TAG, "uid=$uid NS: wifi=${nsWifi.totalBytes}B mobile=${nsMobile.totalBytes}B")
                 }
-                // Case 2: TrafficStats has more (normal — NetworkStatsManager is delayed)
-                // Use TrafficStats total, split by NetworkStatsManager ratio
-                tsTotal > 0 && nsTotal > 0 -> {
-                    val wifiRatio = nsWifi.totalBytes.toDouble() / nsTotal
-                    val mobileRatio = nsMobile.totalBytes.toDouble() / nsTotal
-                    wifi = UsageBytes(
-                        rxBytes = (trafficStatsDelta.rxBytes * wifiRatio).toLong(),
-                        txBytes = (trafficStatsDelta.txBytes * wifiRatio).toLong()
-                    )
-                    mobile = UsageBytes(
-                        rxBytes = (trafficStatsDelta.rxBytes * mobileRatio).toLong(),
-                        txBytes = (trafficStatsDelta.txBytes * mobileRatio).toLong()
-                    )
-                    Log.d(TAG, "uid=$uid: TrafficStats=${tsTotal}B > NetworkStats=${nsTotal}B, " +
-                        "split ratio wifi=${(wifiRatio*100).toInt()}% mobile=${(mobileRatio*100).toInt()}%")
-                }
-                // Case 3: NetworkStatsManager returned 0, only TrafficStats has data
                 tsTotal > 0 -> {
-                    // Can't determine split, report all as wifi
-                    wifi = trafficStatsDelta
+                    // Fallback: TrafficStats delta — can't split, report all as WiFi
+                    wifi = tsDelta
                     mobile = UsageBytes(0, 0)
-                    Log.d(TAG, "uid=$uid: TrafficStats=${tsTotal}B, NetworkStats=0 — reporting all as WiFi")
+                    Log.d(TAG, "uid=$uid TS fallback: ${tsTotal}B (NS=0)")
                 }
-                // Case 4: No traffic at all
                 else -> {
                     wifi = UsageBytes(0, 0)
                     mobile = UsageBytes(0, 0)
@@ -180,6 +172,26 @@ class NetworkUsageHelper @Inject constructor(
     fun captureBaseline(uids: List<Int>): Map<Int, UsageBytes> {
         val baseline = uids.associateWith { uid -> getTrafficStatsUsage(uid) }
         Log.d(TAG, "Baseline captured for ${uids.size} UIDs, total=${baseline.values.sumOf { it.totalBytes }}B")
+        return baseline
+    }
+
+    /**
+     * Capture NetworkStatsManager baseline at session start.
+     * Queries epoch 0 → now so future polls can subtract this to get session delta.
+     */
+    fun captureNsBaseline(uids: List<Int>): Map<Int, SplitUsage> {
+        if (!hasUsageStatsPermission()) return emptyMap()
+        val now = System.currentTimeMillis()
+        val uidSet = uids.toSet()
+        val wifiCumulative = queryBulkUsage(ConnectivityManager.TYPE_WIFI, buildWifiSubscriberIds(), uidSet, 0L, now)
+        val mobileCumulative = queryBulkUsage(ConnectivityManager.TYPE_MOBILE, buildMobileSubscriberIds(), uidSet, 0L, now)
+        val baseline = uids.associateWith { uid ->
+            SplitUsage(
+                wifi = wifiCumulative[uid] ?: UsageBytes(0, 0),
+                mobile = mobileCumulative[uid] ?: UsageBytes(0, 0)
+            )
+        }
+        Log.d(TAG, "NS baseline captured for ${uids.size} UIDs")
         return baseline
     }
 
